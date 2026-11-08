@@ -36,7 +36,7 @@ over with a new duplicate spec.
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | — | archived `2026-11-07-stabilize-far-field-tree-placement` and `2026-11-07-audit-vegetation-distribution` (sea-datum exclusion, versioned identity) |
 | VG-02 canopy | `vegetation-placement` | — | archived `2026-11-08-volumetric-canopy` |
 | VG-03 wind and shading | `vegetation-presentation` | active `2026-11-08-foliage-wind` | |
-| CL-01…06 clouds | — | — | **gap**: requirements live in `docs/technical_specification_photorealistic_procedural_3d_cloud_engine.md`, not in OpenSpec |
+| CL-01…06 clouds | `cloud-deck` | active `2026-11-08-cloud-cell-spectrum` | gap closed for the density, coverage, type, wind and LOD requirements; the cloud engine's lighting/aerial-perspective behaviour still lives only in the technical specification |
 | AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |
@@ -52,13 +52,10 @@ over with a new duplicate spec.
 
 ## Requirement gaps, ranked
 
-1. **Clouds have no OpenSpec spec.** The cloud engine has a thorough technical
-   specification document and a long implementation history, but no OpenSpec
-   requirement with scenarios. Consequence: CL-01…06 cannot point at an
-   authoritative acceptance criterion, and "what does correct look like" lives in
-   a doc that is not validated. **Action:** write an OpenSpec change for the cloud
-   presentation requirements when CL-05 starts, not before — it must describe the
-   behaviour that survives that work.
+1. **Clouds now have a partial OpenSpec spec.** `cloud-deck` covers the density
+   field, coverage, type, cell size, wind alignment and march LOD, added with
+   CL-05. The deck's lighting, aerial perspective and temporal accumulation are
+   still only in `docs/technical_specification_photorealistic_procedural_3d_cloud_engine.md`.
 2. **Diagnostics have no requirement.** P0-03 is developer tooling. A short spec
    is still worth having so "the mode must not change the simulation" is
    enforceable.

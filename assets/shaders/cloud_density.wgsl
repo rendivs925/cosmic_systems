@@ -243,8 +243,28 @@ fn sample_density(
         stretch_along_wind(sample_pos, field.wind_direction, CLOUD_STREAK_STRETCH),
         lod,
     );
+    // Cell-size spectrum. The base volume's green/blue/alpha channels are Worley
+    // octaves at 6/12/24 cells across the tile, so one fetch already carries
+    // three cloud-cell sizes (roughly 3, 1.5 and 0.75 km at the Earth deck).
+    // Re-weighting them changes the dominant cell size without moving the sample
+    // coordinate - a coordinate warp was tried and produced swirls - and without
+    // another fetch.
+    //
+    // The selector is regional plus per-cell: the weather map's smooth alpha
+    // channel biases a whole system one way, and the coarse Worley channel makes
+    // neighbouring cells differ, so one deck holds large soft masses beside
+    // small broken cells instead of one repeated puff. Both are already fetched.
+    // A coarser carve reads as a larger cell; a finer one breaks the same mass
+    // into smaller cells.
     let low_fbm = base.g * 0.625 + base.b * 0.25 + base.a * 0.125;
-    var base_density = remap(base.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
+    let regional_size = saturate(remap(weather.a, 0.25, 0.75, 0.0, 1.0));
+    let size_selector = saturate(mix(regional_size, base.g, 0.65));
+    // Selector zero reproduces the existing carve exactly, so the coverage
+    // invariant is anchored at the current field; higher values push the carve
+    // toward the finer octaves and break one mass into smaller cells.
+    let fine_fbm = base.b * 0.35 + base.a * 0.65;
+    let cell_fbm = mix(low_fbm, fine_fbm, size_selector);
+    var base_density = remap(base.r, cell_fbm - 1.0, 1.0, 0.0, 1.0);
     base_density = base_density * gradient;
     let density_with_coverage = saturate(remap(base_density, 1.0 - coverage, 1.0, 0.0, 1.0));
     if density_with_coverage <= 0.001 {

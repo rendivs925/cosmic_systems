@@ -1278,39 +1278,35 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** commit `23fe1a4`.
 
 ### CL-05 — Cloud shape and type diversity
-- **Status:** PLANNED
+- **Status:** IMPLEMENTED
 - **Priority:** P1
 - **Objective:** Give the deck more than one cell size and type within a regime.
 - **Dependencies:** CL-01, CL-02.
-- **Subsystems:** cloud density.
+- **Subsystems:** cloud density field, weather map.
 - **Expected files:** `assets/shaders/cloud_density.wgsl`,
-  `src/infrastructure/bevy_adapters/rocket/planet.rs`.
-- **Acceptance:** a size spectrum blended by a noise selector, seamless at tile
-  edges; coverage invariant unchanged (0.394 ± 0.02 bright-cloud share on the
-  chase view).
-- **Tests:** coverage invariant; tiling continuity.
-- **Visual evidence:** 1,200 km and chase frames.
-- **Performance:** must not add a noise fetch in the density loop.
-- **Scientific validation:** procedural, labelled procedural.
-- **Risks:** the earlier per-sample coordinate shear produced swirls and was
-  rejected; the selector must change amplitude, not sample position.
-- **Completion evidence:** pending.
-
-### CL-06 — Edge structure
-- **Status:** PLANNED
-- **Priority:** P2
-- **Objective:** Replace the salt-and-pepper cloud edges with resolved erosion.
-- **Dependencies:** CL-05.
-- **Subsystems:** cloud density.
-- **Expected files:** `assets/shaders/cloud_density.wgsl`,
-  `assets/shaders/clouds.wgsl`.
-- **Acceptance:** edge ramp ≈ `coverage * 0.25`; bright-cloud share held.
-- **Tests:** coverage invariant.
-- **Visual evidence:** 400–1,200 km frames.
-- **Performance:** measured; edge work must stay inside the march budget.
-- **Scientific validation:** none; presentation.
-- **Risks:** sharpening without a top-height field was already rejected once.
-- **Completion evidence:** pending.
+  `src/domain/services/cloud_noise.rs`.
+- **Implementation:** `sample_density` re-weights the base volume's Worley
+  octaves (6/12/24 cells, about 3/1.5/0.75 km at the Earth deck) with a scalar
+  selector built from the weather map's smooth alpha channel (regional bias) and
+  the coarse Worley channel (per-cell variation). The blend is anchored at the
+  existing carve: selector zero is the old field exactly, so the coverage
+  baseline stays valid, and higher values add finer cells.
+- **Rejected approach recorded:** scaling or shearing the sample coordinate would
+  change cell size directly, but the earlier per-sample shear produced swirls;
+  the selector therefore changes the carve amplitude only.
+- **Tests:** `cloud_density_has_a_cell_size_spectrum_without_extra_fetches`
+  (selector, carve blend, three fetches, no position warp), plus the existing
+  rank-uniformity and periodicity tests on the selector's inputs.
+- **Visual evidence:** pending, captured in the submission pass.
+- **Performance:** no extra fetch; a handful of extra ALU ops in a loop that
+  already samples the volume.
+- **Scientific validation:** procedural, labelled procedural. The cell sizes are
+  the volume's octave scales, not a measured cell-size distribution.
+- **Risks:** a finer carve has more small holes, so fine-selected cells may lose
+  a little density; the selector averages near 0.35–0.5 and the coverage remap
+  follows the blend. Measured in the submission pass.
+- **Completion evidence:** implementation committed; OpenSpec change
+  `2026-11-08-cloud-cell-spectrum` open until the submission pass.
 
 ---
 

@@ -4,8 +4,8 @@
 //! startup: a low-frequency Perlin-Worley *base* volume whose red channel is the
 //! remapped Perlin-Worley density and whose green/blue/alpha channels are Worley
 //! fBm octaves, a high-frequency Worley *detail* volume for edge erosion, and a
-//! 2D *weather* map carrying coverage, precipitation, cloud-type, and a wind
-//! mask. All three are pure functions of a seed, so the same seed always yields
+//! 2D *weather* map carrying coverage, precipitation, cloud-type, and a smooth
+//! cell-size selector. All three are pure functions of a seed, so the same seed always yields
 //! the same bytes; nothing here depends on wall-clock time, frame rate, or
 //! global state. This module is presentation support only: it feeds no
 //! authoritative simulation state.
@@ -70,9 +70,9 @@ pub fn detail_noise_volume(seed: u64) -> Vec<u8> {
 /// 2D weather map as `WEATHER_MAP_RES^2` RGBA8 texels (spec section 8).
 ///
 /// Channels: red is cloud coverage, green is convective vigour (precipitation
-/// potential), blue is the cloud-type altitude morph, and alpha is a wind-drift
-/// mask. Each channel is an independent seeded fBm so the fields are spatially
-/// related but not identical.
+/// potential), blue is the cloud-type altitude morph, and alpha is a smooth
+/// regional cell-size selector. Each channel is an independent seeded fBm so the
+/// fields are spatially related but not identical.
 ///
 /// Red, green and blue are histogram-equalised to a rank, not left as the raw
 /// fBm. fBm concentrates almost every texel near its mean, so a threshold
@@ -84,7 +84,8 @@ pub fn detail_noise_volume(seed: u64) -> Vec<u8> {
 /// monotone function of the periodic field, so the tile still wraps at both
 /// seams.
 ///
-/// The alpha mask stays a raw fBm: it is a smooth drift field, not a selector.
+/// The alpha channel stays a raw fBm: it only biases the cell size within a
+/// system, so it is used as a smooth weight, not thresholded like a rank.
 pub fn weather_map(seed: u64) -> Vec<u8> {
     let res = WEATHER_MAP_RES;
     let mut data = vec![0u8; res * res * 4];

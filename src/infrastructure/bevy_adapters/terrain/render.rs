@@ -3873,6 +3873,45 @@ mod tests {
         );
     }
 
+    /// CL-05: one deck must hold more than one cell size. The base volume's
+    /// green/blue/alpha channels are Worley octaves at 6/12/24 cells, so the
+    /// size spectrum is a re-weighting of one fetch. A coordinate warp was tried
+    /// before and produced swirls, so the selector must change the carve
+    /// amplitude and not the sample position, and it must not add a fetch.
+    #[test]
+    fn cloud_density_has_a_cell_size_spectrum_without_extra_fetches() {
+        let module = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        assert!(
+            module.contains("let size_selector ="),
+            "the density field has no cell-size selector"
+        );
+        assert!(
+            module.contains("mix(low_fbm, fine_fbm, size_selector)"),
+            "the selector must re-weight the carve, not replace it"
+        );
+        for channel in ["weather.a", "base.g", "base.b", "base.a"] {
+            assert!(
+                module.contains(channel),
+                "the size spectrum must come from already-fetched {channel}"
+            );
+        }
+        // Amplitude, not position: the selector must not read or warp the sample
+        // coordinate. The rejected version sheared the coordinate and swirled.
+        let selector = module
+            .lines()
+            .find(|line| line.contains("let size_selector ="))
+            .expect("size selector line");
+        assert!(
+            !selector.contains("body_pos") && !selector.contains("sample_pos"),
+            "the cell-size selector must not touch the sample position: {selector}"
+        );
+        assert_eq!(
+            module.matches("textureSampleLevel(").count(),
+            3,
+            "the size spectrum must reuse the existing three fetches"
+        );
+    }
+
     /// Convective cells are stretched along the wind, and the deck and its
     /// shadows must use that same axis. The helper and the factor both live in
     /// the shared module so no consumer can re-derive either.
