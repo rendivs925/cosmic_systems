@@ -76,6 +76,8 @@ missing ones explainable.
 | `2026-11-08-lf04-falcon9-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `ce69a0d8c257b037` | Falcon 9 70 x 3.7: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
 | `2026-11-08-lf04-sls-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `c9ddfa5ae9e87e38` | SLS 98 x 8.4: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
 | `2026-11-08-lf04-starship-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `e05ad4eda23d40b6` | Starship 121 x 9.0: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
+| `2026-11-08-vg02-papua-300m-crown.jpg` | `8d8d46b` | `-8.0,139.5,300` | 02:40Z | 400 | `b69a1b13fa4998fe` | Papua near field: crowns are closed lobed volumes, not card stacks | each crown has a silhouette and a lit side |
+| `2026-11-08-vg02-papua-600m-crown.jpg` | `8d8d46b` | `-8.0,139.5,600` | 02:40Z | 300 | `2eaca1fcdb8fba32` | the same crowns at the edge of the near band | crowns read as volumes, not flat specks |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -392,6 +394,19 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Volumetric near-band crowns (`VG-02`, commit `8d8d46b`)
+
+A crown was three stacked crossed billboards plus a crossed pair at every branch
+tip. The stacked layers are now a closed jittered ellipsoid shell with outward
+normals. The far band keeps its crossed impostor cards.
+
+The first emission order wound the shell inward, so the crown rendered as a
+hollow ring with the ground visible through the middle. That is why the outward
+winding is documented at the index emission rather than left implicit.
+
+Branch-tip lobes stay cards deliberately: nine shells per tree cost 50 % more of
+the reservation and pushed the finest terrain patch out of the streaming budget.
 
 ### Open flame trench (`LF-03`, commit `aa7da40`)
 

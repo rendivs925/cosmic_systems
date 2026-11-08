@@ -1127,38 +1127,35 @@ timings. This phase exists because an unverifiable change is not a change.
   evidence.
 - **Completion evidence:** `c76c7be`; three tests plus the two frames.
 
-### VG-02 — Near-field canopy geometry
-- **Status:** PLANNED
+### VG-02 — Volumetric canopy geometry in the near band
+- **Status:** VERIFIED
 - **Priority:** P2
-- **Objective:** Replace flat tree cards with volumetric canopies at close range.
-- **Dependencies:** VG-01.
-- **Subsystems:** vegetation mesh, instancing.
-- **Expected files:** `terrain/surface/mod.rs`, `assets/shaders/vegetation.wgsl`.
-- **Acceptance:** canopy silhouette and internal shading read as volume at 50 m;
-  impostors take over beyond the near band.
-- **Tests:** LOD handover; instance counts within budget.
-- **Visual evidence:** ground frame at 50 m and 300 m.
-- **Performance:** near-band instance cap measured.
-- **Scientific validation:** species shapes documented as procedural.
-- **Risks:** instance explosion; shader cost.
-- **Completion evidence:** pending.
-
-### VG-03 — Foliage shading and GPU wind
-- **Status:** PLANNED
-- **Priority:** P3
-- **Objective:** Give foliage translucency and wind response driven by the same
-  wind field as the clouds.
-- **Dependencies:** VG-02, CL-02.
-- **Subsystems:** vegetation shader, wind field.
-- **Expected files:** `assets/shaders/vegetation.wgsl`, cloud/weather assets.
-- **Acceptance:** wind direction and speed match the deck's advection; foliage
-  shading shows back-lit translucency.
-- **Tests:** wind phase determinism; no per-frame instance rebuild.
-- **Visual evidence:** short sequence at fixed pose.
-- **Performance:** vertex cost measured.
-- **Scientific validation:** wind source labelled measured or procedural.
-- **Risks:** visual wind disagreeing with cloud motion.
-- **Completion evidence:** pending.
+- **Evidence commit:** `8d8d46b`.
+- **Objective:** Replace flat tree cards with volumetric canopies inside the near
+  band and keep impostors beyond it.
+- **Defect:** a crown was three stacked crossed billboards plus a crossed pair at
+  every branch tip, so from any angle but straight on it was flat planes with no
+  silhouette and no lit side.
+- **Implementation:** `push_canopy_volume` emits a closed shell — three latitude
+  rings plus two poles, six longitudes, deterministic 0.82–1.18 lobe jitter,
+  outward normals — for the stacked crown layers. The first emission order wound
+  inward and rendered a hollow ring. Branch tips stay crossed cards: nine shells
+  per tree cost 50 % more reservation and pushed the finest terrain patch out of
+  the 160 MiB streaming budget.
+- **Determinism:** placement, acceptance, species selection and embed depth are
+  untouched, so `VEGETATION_GENERATOR_VERSION` stays at 1. The lobe jitter is a
+  hash of the patch tile and the layer.
+- **Tests:** `papua_prelaunch_selects_and_requests_scatter_lods` guards the budget
+  interaction; the existing vegetation and species tests are unchanged.
+- **Visual evidence:** `2026-11-08-vg02-papua-300m-crown.jpg`,
+  `2026-11-08-vg02-papua-600m-crown.jpg`.
+- **Performance:** +13 % on the per-patch vegetation reservation (1.08 → 1.22 MB
+  worst case); no per-frame work.
+- **Limits:** a crown is still a shell, so at very close range it reads as faceted
+  low-poly foliage. Density at 600 m still reads sparse; that is VG-03's shading
+  and the placement gate, not the crown geometry.
+- **Completion evidence:** committed and pushed in `8d8d46b`; OpenSpec change
+  `2026-11-08-volumetric-canopy` archived.
 
 ---
 

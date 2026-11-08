@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 37 | 82.2 % |
+| VERIFIED | 38 | 84.4 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 6 | 13.3 % |
+| PLANNED | 5 | 11.1 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -121,7 +121,7 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — VG-02, near-field canopy.** LF-04 is closed: the clamps sat
+**Next task — VG-03, foliage shading and wind.** VG-02 is closed: near-band crowns are closed volumes and the far band keeps impostors. LF-04 is closed: the clamps sat
 inside the SLS and Starship hulls, the tower always had five platforms, and the
 service arms indexed a platform a short tower does not have. All three are fixed
 and tested per family. LF-03 is closed: the trench was
