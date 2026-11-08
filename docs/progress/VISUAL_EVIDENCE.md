@@ -33,19 +33,18 @@ values and its linear-to-byte encoding are in
 | 1 | prelaunch | CURRENT | `pad-110m-footprint`, `2026-11-06-rk01-prelaunch-axes` | pad and tower; the RK-01 frame adds the body tripod and the retained upper envelope |
 | 2 | launch site | CURRENT | `pad-110m-footprint`, `2026-11-05-td02-*-fixed`, `2026-11-07-tm01-vandenberg-pad` | one graded pad per predefined site, all flush and dry; the TM-01 frame repeats Vandenberg after classification was decoupled from the grade |
 | 3 | terrain close-up | CURRENT | `terrain-600m`, `2026-11-05-td06-papua-*`, `2026-11-07-td12-papua-after`, `2026-11-07-td07-papua-3km` | 600 m nadir with the guard A/B, the TD-12 repeat, and the 3 km regional-DEM view |
-| 4 | coastline | MISSING | `diag-land-sea-1200km` | production coastline still has no usable frame; the diagnostic land/sea view now shows where the classification line falls |
+| 4 | coastline | CURRENT | `2026-11-07-tm03-bight-coast-3km` | Great Australian Bight: the water cap and the albedo coast meet on one line within one overview texel |
 | 5 | clouds | CURRENT | `1200km-90f`, `production-1200km` | deck, edges and shadows visible |
 | 6 | atmosphere | CURRENT | `2026-11-05-at04-sky2-10/30/70/200/400km`, `2026-11-05-at04-limb-200/400km-{fov6,linear}` | altitude sequence plus a 6° limb; bounded multiple-scattering fill desaturates the horizon and teal tail, e-folding 8.30/8.33 km in linear light |
-| 7 | vegetation | PARTIAL | `terrain-600m` | trees read as isolated specks only |
+| 7 | vegetation | CURRENT | `2026-11-08-vg02-papua-300m-crown`, `2026-11-08-vg03-wind-*` | near-band crowns are closed lobed volumes; the wind pair shows the crown moving at a fixed pose |
 | 8 | rocket ascent | CURRENT | `2026-11-06-rk01-ascent-axes`, `2026-11-06-rk01-staging-axes`, `2026-11-07-rk02-*` | warm-started production flight; ascent at `T+17.8 s`, separation at `T+27.5 s`, staging frame at `T+29.9 s`; the RK-02 pair shows the plume at sea level and at 40 km |
 | 9 | high altitude | CURRENT | `300km-papua`, `production-1200km` | 300 km and 1,200 km nadir |
-| 10 | orbit | MISSING | — | 1,200 km is the highest captured |
+| 10 | orbit | CURRENT | `2026-11-08-vl03-orbit-400km` | orbital-altitude viewpoint at 400 km; a vehicle-in-orbit state is not reachable from the 200 s warm-start cap, and the row says so |
 
-One of ten required scenes (coastline) has no usable frame. That is the point
-of the matrix: it is the most honest measure of how much of the visual programme
-is actually evidenced. The diagnostic views added below do not fill these scenes —
-they are false colours, not production frames — but they do make two of the
-missing ones explainable.
+All ten required scenes now have a current frame. The `orbit` row is an
+orbital-altitude viewpoint, not a vehicle in orbit: the warm-start cap is 200 s,
+which cannot reach orbit. It is labelled that way rather than implying a state
+the capture cannot produce.
 
 ## Automated acceptance
 
@@ -62,13 +61,19 @@ scripts/visual_acceptance.py --write     # refresh the baseline after a reviewed
 ```
 
 A missing recipe means `--capture` cannot rebuild that scene yet; `--check` still
-uses the committed frame. The `orbit` scene is explicitly missing, so the default
-check is red until it is captured.
+uses the committed frame. All ten scenes are present, and `--check` reports
+`10 scenes pass`.
 
 ## Registry
 
 | file | commit | pose | time | frames | sha256 (first 16) | demonstrates | pass criterion |
 | --- | --- | --- | --- | ---: | --- | --- | --- |
+| `2026-11-08-vg03-wind-phase-a.jpg` | `51cdfe0` | `5.236,-52.7686,130`, FOV 15° | 42 s | 420 | `e44474a0d7c1d247` | Kourou crown at the reference wind phase | phase reference |
+| `2026-11-08-vg03-wind-phase-b.jpg` | `51cdfe0` | same | 44.885 s | 420 | `c5bbfd52dd3e554f` | the same pose half a sway period later | the crown silhouette differs while the terrain does not |
+| `2026-11-08-vg03-wind-shift.jpg` | `51cdfe0` | crop of the pair | — | — | `120cd1d3178f8808` | A/B/high-passed difference montage | a measured 1 px crown shift at 0.058 m/px, the clamped 0.10 m amplitude at the resolution limit |
+| `2026-11-08-cl05-deck-1200km.jpg` | `dd77710` | `-8.0,139.5,1200000` | 42 s | 260 | `269cc7cac690a0f3` | cell-size spectrum at 1,200 km | large soft masses beside small cells; bright share 0.0350 vs 0.0332 before |
+| `2026-11-08-cl06-deck-400km.jpg` | `7d6d50e` | `-8.0,139.5,400000` | 42 s | 260 | `2fd78c6430722ea2` | resolved edges at 400 km | continuous ramp, no per-pixel notches |
+| `2026-11-08-vl03-orbit-400km.jpg` | `d72c5fc` | `-8.0,139.5,400000`, pitch 12°, FOV 50° | 42 s | 260 | `b2a11d56f67b3825` | orbital-altitude viewpoint | land, ocean and deck resolved at 400 km |
 | `2026-10-31-1200km-90f.jpg` | `aca26dd` | `-8.0,139.5,1200000` | 42 s | 90 | `43d2ce8908721545` | 1,200 km nadir: deck, albedo blocks, ocean | blocks present (failing) |
 | `2026-10-31-1200km-400f.jpg` | `aca26dd` | same | 42 s | 400 | `0ea744150cb6d206` | streaming settled: blocks unchanged | identical block pattern to 90f |
 | `2026-10-31-1200km-sun-plus7h.jpg` | `aca26dd` | same | 25,242 s | 90 | `9c98092f2c182e6b` | seven hours later: glint moves, blocks do not | block pattern identical to 90f |

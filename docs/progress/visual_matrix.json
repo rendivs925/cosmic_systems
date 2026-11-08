@@ -72,27 +72,28 @@
     {
       "name": "clouds",
       "status": "current",
-      "note": "deck, edges and shadows at 1,200 km",
-      "file": "2026-11-01-production-1200km.jpg",
-      "commit": "f3b1af6",
+      "note": "deck cell-size spectrum and resolved edges at 1,200 km",
+      "file": "2026-11-08-cl05-deck-1200km.jpg",
+      "commit": "51cdfe0",
       "capture": {
         "args": [
           "rocket",
           "--site",
           "papua"
         ],
-        "frames": 200,
+        "frames": 260,
         "env": {
           "COSMIC_SYSTEMS_CAPTURE_POSE": "-8.0,139.5,1200000",
-          "COSMIC_SYSTEMS_CAPTURE_TIME": "42"
+          "COSMIC_SYSTEMS_CAPTURE_TIME": "42",
+          "COSMIC_SYSTEMS_CAPTURE_UTC": "2000-01-01T02:40:00Z"
         }
       },
       "metrics": {
-        "mean_luma": 0.376523,
-        "bright_share": 0.030382,
-        "dark_share": 0.001024,
-        "detail": 0.050096,
-        "colours": 2700.0
+        "mean_luma": 0.373369,
+        "bright_share": 0.044074,
+        "dark_share": 0.000326,
+        "detail": 0.042755,
+        "colours": 2574.0
       }
     },
     {
@@ -192,9 +193,32 @@
     },
     {
       "name": "orbit",
-      "status": "missing",
-      "note": "no orbital frame has been captured",
-      "reason": "no orbital frame has been captured"
+      "status": "current",
+      "note": "orbital-altitude viewpoint at 400 km; no vehicle-in-orbit state is reachable from the 200 s warm start",
+      "file": "2026-11-08-vl03-orbit-400km.jpg",
+      "commit": "d72c5fc",
+      "capture": {
+        "args": [
+          "rocket",
+          "--site",
+          "papua"
+        ],
+        "frames": 260,
+        "env": {
+          "COSMIC_SYSTEMS_CAPTURE_POSE": "-8.0,139.5,400000",
+          "COSMIC_SYSTEMS_CAPTURE_TIME": "42",
+          "COSMIC_SYSTEMS_CAPTURE_UTC": "2000-01-01T02:40:00Z",
+          "COSMIC_SYSTEMS_CAPTURE_PITCH_DEG": "12",
+          "COSMIC_SYSTEMS_CAPTURE_FOV_DEG": "50"
+        }
+      },
+      "metrics": {
+        "mean_luma": 0.341761,
+        "bright_share": 0.037347,
+        "dark_share": 7e-06,
+        "detail": 0.025306,
+        "colours": 1575.0
+      }
     }
   ]
 }

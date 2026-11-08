@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-08. Last code checkpoint: `8d8d46b`.
+Snapshot: 2026-11-08. Last code checkpoint: `d72c5fc`.
 
 ---
 
@@ -28,6 +28,10 @@ and a measurement path that captures frames without a swapchain.
 ## What is currently being built?
 
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
+The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06
+edge structure, RD-01 invalidation audit and VL-03 visual acceptance — are
+implemented, evidenced and archived; only P0-04 and VL-01 remain blocked by the
+absent presentable swapchain.
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
 because the shared default epoch is local noon only at Papua. Resident regional

@@ -11,8 +11,8 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 38 | 84.4 % |
-| IMPLEMENTED (not verified) | 5 | 11.1 % |
+| VERIFIED | 43 | 95.6 % |
+| IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
 | PLANNED | 0 | 0 % |
@@ -26,12 +26,12 @@ evidenced", not "the simulator does not work".
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 2 / 4 | 50 % | active | LF-02 closed; trench and structural detail remain |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
-| P4 Vegetation | 2 / 3 | 67 % | active | VG-01 and VG-02 closed; VG-03 implemented, evidence pending |
-| P5 Clouds and wind | 4 / 6 | 67 % | active | CL-05 and CL-06 implemented; evidence pending |
+| P4 Vegetation | 3 / 3 | 100 % | complete | VG-01…03 closed |
+| P5 Clouds and wind | 6 / 6 | 100 % | complete | CL-01…06 closed |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
-| P8 Rendering optimisation | 2 / 3 | 67 % | active | RD-01 implemented; 600-frame counter evidence pending |
-| P9 Final validation | 1 / 3 | 33 % | active | VL-03 implemented; VL-01 blocked by presentation |
+| P8 Rendering optimisation | 3 / 3 | 100 % | complete | RD-01…03 closed |
+| P9 Final validation | 2 / 3 | 67 % | active | VL-01 blocked by the swapchain; VL-02 and VL-03 closed |
 
 ## Critical unresolved defects
 
@@ -59,15 +59,15 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 98dc788 |
-| `cargo check --all-targets --features dem` | PASS | 98dc788 |
-| `cargo check --no-default-features` | PASS | 98dc788 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 98dc788 |
-| `cargo test --features dem --lib` | 1167 passed, 0 failed, 2 ignored | 98dc788 |
-| `cargo test --no-default-features --lib` | 1124 passed, 0 failed, 2 ignored | 98dc788 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 98dc788 |
+| `cargo fmt --check` | PASS | d72c5fc |
+| `cargo check --all-targets --features dem` | PASS | d72c5fc |
+| `cargo check --no-default-features` | PASS | d72c5fc |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | d72c5fc |
+| `cargo test --features dem --lib` | 1200 passed, 0 failed, 2 ignored | d72c5fc |
+| `cargo test --no-default-features --lib` | 1148 passed, 0 failed, 2 ignored | d72c5fc |
+| `openspec validate --all --strict` | 43 passed, 0 failed | d72c5fc |
 | `cargo build --release --features dem` | PASS | eba5d6e |
-| three-mode smoke (25 s each) | PASS at the time; **blocked now** | `fb686ba` |
+| three-mode smoke (25 s each) | **blocked** — no presentable swapchain | — |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -104,6 +104,7 @@ One of ten required scenes (coastline) has no usable frame. See `VISUAL_EVIDENCE
 | Draw calls / triangles | not exposed |
 | Memory | 1,261–1,492 MiB GPU; ~1.77 GB RSS (2026-09-11); 610–640 MB RSS (2026-08-23) |
 | Terrain streaming | bounded at 128 MiB geometry budget; two worker bakes/frame (2026-09-11) |
+| Stationary render-asset creation (RD-01) | 0 mesh / 0 material / 0 image, 0 duplicate requests over two 600-frame windows at the Papua chase pose (pinned clock) |
 | Rocket effects (debug capture, 40 km) | 33 effect entities / 21 visible; engine effect update 0.016–0.022 ms, ground 0.0011–0.0017 ms (2026-11-07) |
 
 The offscreen capture path is pinned to 60 Hz and is therefore **not** a
@@ -113,18 +114,17 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 | item | value |
 | --- | --- |
-| specs | 40 |
+| specs | 42 |
 | active changes | 1 — `spaceflight-game-mvp` (5/37 tasks) |
-| archived changes | 44 |
-| strict validation | 41/41 pass |
-| requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
+| archived changes | 51 |
+| strict validation | 43/43 pass |
+| requirement gaps | cloud lighting and aerial perspective still live only in the technical specification; visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — the submission pass.** All planned implementation slices are done; capture the deferred evidence, run the full gate, and close the five open changes. VL-03 is implemented:
+**Next task — none unblocked.** All 43 non-blocked tasks are verified. P0-04 and VL-01 remain blocked by the absent presentable Vulkan swapchain; the offscreen path cannot substitute for a windowed session. VL-03 is verified:
 `visual_matrix.json` plus `scripts/visual_acceptance.py` machine-check the ten
-required scenes, with `--write` for a reviewed baseline and `--capture` to
-re-render from the recorded recipe. RD-01 is implemented:
+required scenes, and `10 scenes pass`. RD-01 is verified:
 every per-frame terrain system is classified, and the vegetation uniform no
 longer rewrites inputs that are already current. CL-06 is implemented:
 the coverage band is a smoothstep with a resolved lower-quarter edge, and the

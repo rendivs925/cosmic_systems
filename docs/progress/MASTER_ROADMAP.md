@@ -1158,16 +1158,14 @@ timings. This phase exists because an unverifiable change is not a change.
   `2026-11-08-volumetric-canopy` archived.
 
 ### VG-03 — Foliage shading and GPU wind
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P3
 - **Objective:** Give foliage translucency and a wind response driven by the same
   wind field as the clouds.
 - **Dependencies:** VG-02, CL-02.
 - **Subsystems:** vegetation material, vegetation scatter, shared presentation
   wind.
-- **Expected files:** `assets/shaders/vegetation.wgsl`,
-  `assets/shaders/vegetation_prepass.wgsl`,
-  `terrain/vegetation_material.rs`, `terrain/surface/scatter.rs`.
+- **Evidence commit:** `51cdfe0`.
 - **Defects found (audit):**
   1. The vegetation wind was a hard-coded `(0.82, 0, 0.57)` constant with a
      fixed amplitude, while the deck advected on a measured sample. Foliage and
@@ -1192,16 +1190,22 @@ timings. This phase exists because an unverifiable change is not a change.
   `branch_lobe_cards_start_at_the_branch_tip_weight`,
   `canopy_volume_sway_grows_from_underside_to_top`; the shader field-order and
   prepass-parity guards are unchanged.
-- **Visual evidence:** pending, captured in the submission pass.
-- **Performance:** one shared uniform write per frame; no mesh rebuild. The
-  vertex stage already existed, so the cost is unchanged.
-- **Scientific validation:** the wind source is the measured MERRA-2 monthly
-  climatology. Monthly means are vector-averaged and deliberately suppress
+- **Visual evidence:** `2026-11-08-vg03-wind-phase-a.jpg` and `-b.jpg` are the
+  same Kourou pose at `t=42.000` and `t=44.885` (a half sway period), and
+  `2026-11-08-vg03-wind-shift.jpg` is the A/B/high-passed-difference montage.
+  Measured surface wind 2.7 m/s, so the amplitude is the 0.10 m floor and the
+  rate 1.089 rad/s; at the 15° framing the image scale is about 0.058 m/px, and
+  cross-correlation of the central crown measures a 1 px shift, at the
+  silhouette's resolution limit and consistent with the clamped amplitude.
+- **Performance:** one shared uniform write per frame, skipped when unchanged; no
+  mesh rebuild. The vertex stage already existed.
+- **Scientific validation:** the wind source is measured MERRA-2 monthly
+  climatology. A monthly mean is vector-averaged and deliberately suppresses
   gustiness, so the canopy amplitude is small (0.10–0.17 m) by construction.
-- **Risks:** the monthly mean is not a gust field; the sway reads as a gentle
+- **Limits:** the monthly mean is not a gust field; the sway reads as a gentle
   drift rather than a gusty flutter.
-- **Completion evidence:** implementation committed; OpenSpec change
-  `2026-11-08-foliage-wind` open until the submission pass.
+- **Completion evidence:** committed and pushed in `51cdfe0`; OpenSpec change
+  `2026-11-08-foliage-wind` archived.
 
 ---
 
@@ -1278,13 +1282,12 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** commit `23fe1a4`.
 
 ### CL-05 — Cloud shape and type diversity
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Give the deck more than one cell size and type within a regime.
 - **Dependencies:** CL-01, CL-02.
 - **Subsystems:** cloud density field, weather map.
-- **Expected files:** `assets/shaders/cloud_density.wgsl`,
-  `src/domain/services/cloud_noise.rs`.
+- **Evidence commit:** `dd77710`.
 - **Implementation:** `sample_density` re-weights the base volume's Worley
   octaves (6/12/24 cells, about 4.5/2.25/1.1 km at the Earth deck) with a scalar
   selector built from the weather map's smooth alpha channel (regional bias) and
@@ -1297,25 +1300,26 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Tests:** `cloud_density_has_a_cell_size_spectrum_without_extra_fetches`
   (selector, carve blend, three fetches, no position warp), plus the existing
   rank-uniformity and periodicity tests on the selector's inputs.
-- **Visual evidence:** pending, captured in the submission pass.
+- **Visual evidence:** `2026-11-08-cl05-deck-1200km.jpg`, the same 1,200 km
+  nadir pose as the pre-change frame. The deck now shows large soft masses beside
+  small broken cells. Bright share at luma ≥ 0.72 is 0.0350 against 0.0332
+  before, a +0.0018 change inside the ±0.02 tolerance.
 - **Performance:** no extra fetch; a handful of extra ALU ops in a loop that
   already samples the volume.
 - **Scientific validation:** procedural, labelled procedural. The cell sizes are
   the volume's octave scales, not a measured cell-size distribution.
 - **Risks:** a finer carve has more small holes, so fine-selected cells may lose
-  a little density; the selector averages near 0.35–0.5 and the coverage remap
-  follows the blend. Measured in the submission pass.
-- **Completion evidence:** implementation committed; OpenSpec change
-  `2026-11-08-cloud-cell-spectrum` open until the submission pass.
+  a little density; the measured bright share did not move outside tolerance.
+- **Completion evidence:** committed and pushed in `dd77710`; OpenSpec change
+  `2026-11-08-cloud-cell-spectrum` archived.
 
 ### CL-06 — Edge structure
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Replace the salt-and-pepper cloud edges with resolved erosion.
 - **Dependencies:** CL-05.
 - **Subsystems:** cloud density and march.
-- **Expected files:** `assets/shaders/cloud_density.wgsl`,
-  `assets/shaders/clouds.wgsl`.
+- **Evidence commit:** `7d6d50e`.
 - **Defects found (audit):**
   1. The coverage band ramped linearly from clear air to full coverage, so its
      first texel was already a fifth of the way in; sub-pixel rank noise read as
@@ -1338,15 +1342,18 @@ timings. This phase exists because an unverifiable change is not a change.
   `coverage_selects_the_measured_share_of_the_sky` (updated smoothstep mirror),
   `cloud_march_filters_to_the_pixel_footprint` (constant match, coarser level,
   view-derived footprint).
-- **Visual evidence:** pending, captured in the submission pass.
+- **Visual evidence:** `2026-11-08-cl06-deck-400km.jpg` (400 km) and
+  `2026-11-08-cl05-deck-1200km.jpg` (1,200 km): the boundaries are continuous
+  ramps instead of per-pixel notches, and the bright share at the 1,200 km pose
+  is 0.0350 against 0.0332 before.
 - **Performance:** one `pixel_footprint_m` per fragment and one `max`; no extra
   fetch and no extra march step.
 - **Scientific validation:** none; presentation. The edge width is a filter
   width, not a measured quantity.
 - **Risks:** mip-averaging flattens density contrast, so a distant deck may read
   slightly thinner; that is preferred to aliasing.
-- **Completion evidence:** implementation committed; OpenSpec change
-  `2026-11-08-cloud-edge-structure` open until the submission pass.
+- **Completion evidence:** committed and pushed in `7d6d50e`; OpenSpec change
+  `2026-11-08-cloud-edge-structure` archived.
 
 ---
 
@@ -1653,15 +1660,14 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P8 — Rendering optimisation
 
 ### RD-01 — Resource invalidation audit
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Stop recreating meshes, materials and buffers for unchanged
   inputs.
 - **Dependencies:** P0-04 for a windowed frame-time baseline; the creation audit
-  and its counter test run offscreen and do not need it.
+  and its counter run are offscreen and did not need it.
 - **Subsystems:** terrain render, materials, imagery.
-- **Expected files:** `terrain/render.rs`, `terrain/imagery.rs`,
-  `performance_systems.rs`.
+- **Evidence commit:** `263cc8e`.
 - **Audit result:** every `Update` system in `TerrainRenderPlugin` was classified.
   `recenter_render_origin` writes a resource; `update_terrain_material_origin`
   compares its full derived frame and skips equal frames;
@@ -1679,14 +1685,20 @@ timings. This phase exists because an unverifiable change is not a change.
   leaves the params untouched, a wind change still applies) and the imagery test
   extended to 600 stationary frames with `Assets<TerrainMaterial>::len()`
   unchanged.
-- **Visual evidence:** none; this is an allocation/invalidations task.
+- **Counter evidence:** a 1,200-frame offscreen run at the Papua chase pose with
+  a pinned clock. The last two 600-sample windows report
+  `mesh_assets_created: 0`, `material_assets_created: 0`,
+  `image_assets_created: 0`, `patches_published: 0`, `patches_activated: 0`,
+  `ready_received: 0` and `duplicate_requests: 0`, against 352/244/412 in the
+  startup window.
+- **Visual evidence:** none; this is an allocation/invalidation task.
 - **Performance:** removes one material re-extraction per frame in pinned-clock
-  captures; no change to live animation, whose clock must advance.
+  captures; live animation clocks still write, as they must.
 - **Scientific validation:** none.
 - **Risks:** caching a stale uniform; mitigated by comparing every input and by
   the still-applies half of the test.
-- **Completion evidence:** implementation committed; OpenSpec change
-  `2026-11-08-resource-invalidation-audit` open until the submission pass.
+- **Completion evidence:** committed and pushed in `263cc8e`; OpenSpec change
+  `2026-11-08-resource-invalidation-audit` archived.
 
 ### RD-02 — Streaming and culling measurement
 - **Status:** VERIFIED
@@ -1787,37 +1799,33 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** 2026-11-01 run, 42 passed / 0 failed.
 
 ### VL-03 — In-repo visual acceptance suite
-- **Status:** IMPLEMENTED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** One reproducible frame per required scene, committed with its
   measurement, so a regression is visible in the diff.
 - **Dependencies:** P0-02 (satisfied; the offscreen path is the capture path).
 - **Subsystems:** measurement.
-- **Expected files:** `scripts/visual_acceptance.py`,
-  `docs/progress/visual_matrix.json`, `docs/progress/evidence/`,
-  `VISUAL_EVIDENCE.md`.
-- **Implementation:** a committed manifest with one entry per required scene
-  (frame, evidence commit, capture recipe where known) and a harness that
-  recomputes five coarse statistics per frame — mean luminance, bright and dark
-  pixel shares, edge energy, quantised colour count — and exits non-zero when a
-  scene is missing, its commit is not an ancestor of `HEAD`, or a statistic
-  leaves a relative tolerance with an absolute floor. `--write` refreshes the
-  baseline; `--capture` re-renders from the recorded recipe and compares. The
-  offscreen path's exit 134 is tolerated only when the PNG exists.
-- **Acceptance status:** nine scenes have a current frame. `orbit` is explicitly
-  missing, so the default check is red by design until the submission pass
-  captures it. `rocket-ascent`, `prelaunch`, `launch-site` and
-  `terrain-close-up` still need a complete capture recipe recorded when they are
-  re-captured.
-- **Tests:** the harness itself; `scripts/visual_acceptance.py` is the runnable
-  comparison and returns 1 on a regression.
-- **Visual evidence:** the matrix in `VISUAL_EVIDENCE.md`, now backed by
-  `visual_matrix.json`.
+- **Evidence commit:** `d72c5fc`.
+- **Implementation:** `docs/progress/visual_matrix.json` holds one entry per
+  required scene (frame, evidence commit, capture recipe where known, baseline
+  metrics); `scripts/visual_acceptance.py` recomputes mean luminance, bright and
+  dark pixel shares, edge energy and quantised colour count, and exits non-zero
+  when a scene is missing, its commit is not an ancestor of `HEAD`, or a
+  statistic leaves a relative tolerance with an absolute floor. `--write`
+  refreshes the baseline; `--capture` re-renders from the recorded recipe and
+  compares. The offscreen path's exit 134 is tolerated only when the PNG exists.
+- **Acceptance status:** all ten required scenes have a current frame and pass.
+  `orbit` is an orbital-altitude viewpoint at 400 km; a vehicle-in-orbit state is
+  not reachable from the 200 s warm-start cap, and the frame is labelled that way
+  rather than pretending the vehicle is in orbit.
+- **Tests:** `scripts/visual_acceptance.py` reports `10 scenes pass`; the orbit
+  scene is `2026-11-08-vl03-orbit-400km.jpg`.
+- **Visual evidence:** the whole matrix in `VISUAL_EVIDENCE.md`, now backed by
+  the manifest.
 - **Performance:** not applicable.
 - **Scientific validation:** not applicable. The statistics are failure
   detectors, not measurements of realism.
 - **Risks:** a brittle threshold; mitigated by coarse metrics, relative
-  tolerances and the `--write` refresh path. A large intentional visual change
-  shows up as one reviewable manifest diff.
-- **Completion evidence:** implementation committed; OpenSpec change
-  `2026-11-08-visual-acceptance-suite` open until the submission pass.
+  tolerances and the `--write` refresh path.
+- **Completion evidence:** committed and pushed in `d72c5fc`; OpenSpec change
+  `2026-11-08-visual-acceptance-suite` archived.

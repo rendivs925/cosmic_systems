@@ -35,20 +35,20 @@ over with a new duplicate spec.
 | TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | — | archived `2026-11-07-stabilize-far-field-tree-placement` and `2026-11-07-audit-vegetation-distribution` (sea-datum exclusion, versioned identity) |
 | VG-02 canopy | `vegetation-placement` | — | archived `2026-11-08-volumetric-canopy` |
-| VG-03 wind and shading | `vegetation-presentation` | active `2026-11-08-foliage-wind` | |
-| CL-01…06 clouds | `cloud-deck` | active `2026-11-08-cloud-cell-spectrum`, `2026-11-08-cloud-edge-structure` | gap closed for the density, coverage, type, wind and LOD requirements; the cloud engine's lighting/aerial-perspective behaviour still lives only in the technical specification |
+| VG-03 wind and shading | `vegetation-presentation` | — | archived `2026-11-08-foliage-wind` |
+| CL-01…06 clouds | `cloud-deck` | — | archived `2026-11-08-cloud-cell-spectrum` and `2026-11-08-cloud-edge-structure` | gap closed for the density, coverage, type, wind and LOD requirements; the cloud engine's lighting/aerial-perspective behaviour still lives only in the technical specification |
 | AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |
 | AT-04 multiple-scattering horizon | `scientific-lighting` | — | added and archived `2026-11-05-add-sky-multiple-scattering`: bounded, luminance-preserving diffuse fill with an explicit energy bound and unchanged limb e-folding |
 | RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | change `2026-11-06-audit-rocket-attitude-staging`: debris render snapshots, stage-centred mesh frame, attitude preservation |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | change `2026-11-07-drive-plume-from-propulsion-state`: mass-flow intensity, expansion length, gimbaled direction, recovering-stage effects |
-| RD-01 invalidation | `terrain-rendering`, `terrain-lod` | active `2026-11-08-resource-invalidation-audit` | every per-frame system classified; the vegetation uniform no longer rewrites unchanged inputs |
+| RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | archived `2026-11-08-resource-invalidation-audit` | every per-frame system classified; the vegetation uniform no longer rewrites unchanged inputs |
 | RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | culling, LOD reconcile and the upload burst are timed separately; GPU upload completion is still unexposed and not claimed |
 | RD-03 shadow lifecycle | `terrain-lighting-occlusion` | — | |
 | VL-01 smoke | `scientific-validation` | — | |
 | VL-02 spec validation | — | — | process check |
-| VL-03 visual suite | `scientific-validation` | active `2026-11-08-visual-acceptance-suite` | manifest + script; orbit still missing |
+| VL-03 visual suite | `scientific-validation` | — | archived `2026-11-08-visual-acceptance-suite` | manifest + script; orbit still missing |
 
 ## Requirement gaps, ranked
 
