@@ -19,6 +19,7 @@ use crate::domain::services::reference_frames::body_fixed_to_planet_inertial_rot
 use crate::domain::services::terrain_source::TerrainSource;
 use crate::domain::services::volumetric_geology::RockShell;
 use crate::domain::value_objects::imagery_manifest::ImageryLocalRegion;
+use crate::infrastructure::bevy_adapters::climate::PresentationWind;
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::performance_components::PerformanceMetricsConfig;
@@ -55,8 +56,8 @@ use crate::infrastructure::bevy_adapters::terrain::surface::{
     NEAR_DETAIL_STRENGTH,
 };
 use crate::infrastructure::bevy_adapters::terrain::vegetation_material::{
-    VegetationExtension, VegetationMaterial, VegetationParams, VEGETATION_THICKNESS_M,
-    VEGETATION_TRANSLUCENCY,
+    sway_frequency_for_surface_wind, sway_strength_for_surface_wind, VegetationExtension,
+    VegetationMaterial, VegetationParams, VEGETATION_THICKNESS_M, VEGETATION_TRANSLUCENCY,
 };
 use crate::infrastructure::bevy_adapters::terrain::water::{
     WaterExtension, WaterMaterial, WaterParams, WaterQualityConfig,
@@ -921,7 +922,9 @@ impl Plugin for TerrainRenderPlugin {
                 Update,
                 (
                     recenter_render_origin.before(stream_terrain_patches),
-                    update_vegetation_material,
+                    // Vegetation reads the wind the cloud deck applied this
+                    // frame, so foliage and clouds cannot disagree.
+                    update_vegetation_material.after(update_rocket_clouds),
                     update_terrain_material_origin.after(recenter_render_origin),
                     update_terrain_cloud_shadow.after(update_rocket_clouds),
                     update_water_material
@@ -1132,20 +1135,32 @@ fn update_water_material(
 }
 
 /// Advance the shared vegetation wind phase and keep every vegetation material
-/// bound to the current render origin. Presentation only; never read by the
-/// simulation, terrain source, or collision. Like the water clock, the origin is
-/// refreshed here so materials created after a recentre are correct on their
-/// first frame.
+/// bound to the current render origin and the presentation wind. Presentation
+/// only; never read by the simulation, terrain source, or collision. Like the
+/// water clock, the origin is refreshed here so materials created after a
+/// recentre are correct on their first frame.
+///
+/// The wind direction is the deck's advection direction from the same measured
+/// climatology sample, published by `update_rocket_clouds`. The amplitude and
+/// the oscillation rate use the measured surface speed: foliage feels the wind
+/// at the ground, while the deck is advected by the mid-tropospheric wind.
 fn update_vegetation_material(
     time: Res<Time>,
     render_origin: Res<RenderOrigin>,
+    wind: Res<PresentationWind>,
     mut vegetation_materials: ResMut<Assets<VegetationMaterial>>,
 ) {
     let elapsed_s = presentation_clock::presentation_time_s(time.elapsed_secs());
     let planet_center = (-render_origin.origin).as_vec3();
+    let strength = sway_strength_for_surface_wind(wind.surface_speed_mps);
+    let frequency = sway_frequency_for_surface_wind(wind.surface_speed_mps);
     for (_, material) in vegetation_materials.iter_mut() {
-        material.extension.params.time_s = elapsed_s;
-        material.extension.params.planet_center = planet_center;
+        let params = &mut material.extension.params;
+        params.time_s = elapsed_s;
+        params.planet_center = planet_center;
+        params.wind_direction = wind.direction_body_fixed;
+        params.wind_strength = strength;
+        params.sway_frequency = frequency;
     }
 }
 

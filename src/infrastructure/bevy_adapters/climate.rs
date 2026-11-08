@@ -31,6 +31,36 @@ impl MeasuredClimate {
     }
 }
 
+/// Presentation wind shared by the cloud deck and the vegetation sway.
+///
+/// The cloud system resolves one measured sample per frame and writes the
+/// direction it actually advects the deck with; vegetation reads this resource
+/// so foliage and clouds cannot disagree about which way the wind blows. The
+/// deck is advected by the mid-tropospheric wind, so its speed is scaled, while
+/// foliage uses the measured surface speed it actually feels. The direction is
+/// the quantity that must agree, and it is the same value.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct PresentationWind {
+    /// Unit horizontal direction in the body-fixed x/z plane (y is zero).
+    pub direction_body_fixed: Vec3,
+    /// Measured 2 m wind speed in metres per second.
+    pub surface_speed_mps: f32,
+    /// Whether a measured sample produced the current value. False means the
+    /// procedural fallback is in use.
+    pub measured: bool,
+}
+
+impl Default for PresentationWind {
+    fn default() -> Self {
+        Self {
+            // The documented procedural fallback: a light westerly.
+            direction_body_fixed: Vec3::new(0.82, 0.0, 0.57).normalize(),
+            surface_speed_mps: 10.0,
+            measured: false,
+        }
+    }
+}
+
 /// Load every `.csclim` package in file-name order at rocket-mode startup.
 /// Missing or malformed packages leave the procedural presentation untouched.
 #[cfg(not(target_arch = "wasm32"))]

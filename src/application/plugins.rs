@@ -661,6 +661,8 @@ impl Plugin for RocketModePlugin {
         app.init_resource::<RocketBoundPlanet>();
         // Optional measured climatology for presentation-only sky and clouds.
         app.init_resource::<MeasuredClimate>();
+        // One wind vector shared by the cloud deck and the vegetation sway.
+        app.init_resource::<crate::infrastructure::bevy_adapters::climate::PresentationWind>();
         // Optional measured gravity field; only the opt-in harmonics tier reads it.
         app.init_resource::<MeasuredGravityHarmonics>();
         app.add_plugins(bevy::pbr::MaterialPlugin::<

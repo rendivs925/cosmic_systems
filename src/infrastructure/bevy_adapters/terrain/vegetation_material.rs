@@ -20,13 +20,49 @@ pub const VEGETATION_SHADER: &str = "shaders/vegetation.wgsl";
 /// so cast shadows track the swaying foliage.
 pub const VEGETATION_PREPASS_SHADER: &str = "shaders/vegetation_prepass.wgsl";
 
-/// Peak horizontal sway displacement at the canopy, in metres.
+/// Peak horizontal sway displacement at the canopy for the procedural
+/// fallback wind, in metres.
 const WIND_STRENGTH_M: f32 = 0.35;
-/// Temporal frequency of the sway, in radians per second.
+/// Temporal frequency of the sway for the procedural fallback wind, in radians
+/// per second.
 const SWAY_FREQUENCY_RAD_S: f32 = 1.6;
 /// Spatial frequency of the sway phase, in radians per metre, so adjacent
 /// plants do not sway in lockstep.
 const WIND_SPATIAL_FREQUENCY_RAD_M: f32 = 0.08;
+/// Peak canopy displacement per metre per second of measured surface wind. A
+/// 10 m/s breeze on a mid-latitude tree bends the crown by roughly a third of a
+/// metre, which is the fallback value below.
+const SWAY_PER_MPS: f32 = WIND_STRENGTH_M / 10.0;
+/// Lower bound on the sway amplitude, metres. Leaves move in a light breeze.
+const MIN_SWAY_M: f32 = 0.10;
+/// Upper bound on the sway amplitude, metres. A tree does not translate a metre
+/// and a half even in a gale; foliage streamlines and sheds instead.
+const MAX_SWAY_M: f32 = 1.0;
+/// Sway frequency at zero wind, radians per second.
+const SWAY_BASE_FREQUENCY_RAD_S: f32 = 0.9;
+/// Additional sway frequency per metre per second of wind.
+const SWAY_FREQUENCY_PER_MPS: f32 = 0.07;
+/// Bounds on the sway frequency, radians per second. Below the lower bound the
+/// sway reads as a slow lean rather than a flutter; above the upper bound it
+/// strobes at typical frame rates.
+const MIN_SWAY_FREQUENCY_RAD_S: f32 = 0.8;
+const MAX_SWAY_FREQUENCY_RAD_S: f32 = 3.2;
+
+/// Peak horizontal canopy displacement for a measured surface wind speed.
+///
+/// Linear in the wind speed and clamped at both ends. Surface wind is what the
+/// foliage feels; the cloud deck is advected by the mid-tropospheric wind, so
+/// only the direction is shared between them, not the magnitude.
+pub fn sway_strength_for_surface_wind(speed_mps: f32) -> f32 {
+    (speed_mps * SWAY_PER_MPS).clamp(MIN_SWAY_M, MAX_SWAY_M)
+}
+
+/// Temporal sway frequency for a measured surface wind speed, in radians per
+/// second. Faster wind makes foliage oscillate faster as well as further.
+pub fn sway_frequency_for_surface_wind(speed_mps: f32) -> f32 {
+    (SWAY_BASE_FREQUENCY_RAD_S + speed_mps * SWAY_FREQUENCY_PER_MPS)
+        .clamp(MIN_SWAY_FREQUENCY_RAD_S, MAX_SWAY_FREQUENCY_RAD_S)
+}
 
 /// Maximum diffuse transmission (translucency) applied at foliage weight 1.
 /// Thin leaf and grass cards transmit backlight, while the per-vertex weight
@@ -148,6 +184,33 @@ mod tests {
         assert!(params.wind_spatial_frequency > 0.0 && params.wind_spatial_frequency.is_finite());
         assert!((params.wind_direction.length() - 1.0).abs() < 1e-5);
         assert_eq!(params.planet_center, Vec3::ZERO);
+    }
+
+    /// The fallback wind speed must reproduce the tuned default amplitude and
+    /// rate, so a missing climatology package changes nothing visually.
+    #[test]
+    fn fallback_wind_speed_reproduces_the_default_sway() {
+        assert!((sway_strength_for_surface_wind(10.0) - WIND_STRENGTH_M).abs() < 1e-6);
+        assert!((sway_frequency_for_surface_wind(10.0) - SWAY_FREQUENCY_RAD_S).abs() < 1e-6);
+    }
+
+    /// Stronger surface wind bends foliage further and faster, and both are
+    /// bounded so a gale or a calm cannot produce a silly displacement.
+    #[test]
+    fn sway_follows_surface_wind_and_is_bounded() {
+        let calm = 0.0;
+        let breeze = 10.0;
+        let gale = 60.0;
+        assert!(sway_strength_for_surface_wind(calm) <= sway_strength_for_surface_wind(breeze));
+        assert!(sway_strength_for_surface_wind(breeze) < sway_strength_for_surface_wind(gale));
+        assert!(sway_frequency_for_surface_wind(calm) <= sway_frequency_for_surface_wind(breeze));
+        assert!(sway_frequency_for_surface_wind(breeze) < sway_frequency_for_surface_wind(gale));
+        for speed in [0.0f32, 5.0, 10.0, 35.0, 200.0] {
+            let strength = sway_strength_for_surface_wind(speed);
+            let frequency = sway_frequency_for_surface_wind(speed);
+            assert!((MIN_SWAY_M..=MAX_SWAY_M).contains(&strength));
+            assert!((MIN_SWAY_FREQUENCY_RAD_S..=MAX_SWAY_FREQUENCY_RAD_S).contains(&frequency));
+        }
     }
 
     #[test]

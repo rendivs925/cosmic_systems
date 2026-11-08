@@ -12,10 +12,10 @@ evidenced", not "the simulator does not work".
 | state | count | share of roadmap |
 | --- | ---: | ---: |
 | VERIFIED | 38 | 84.4 % |
-| IMPLEMENTED (not verified) | 0 | 0 % |
+| IMPLEMENTED (not verified) | 1 | 2.2 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 5 | 11.1 % |
+| PLANNED | 4 | 8.9 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -26,7 +26,7 @@ evidenced", not "the simulator does not work".
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 2 / 4 | 50 % | active | LF-02 closed; trench and structural detail remain |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
-| P4 Vegetation | 1 / 3 | 33 % | active | VG-01 closed; canopy geometry and wind remain |
+| P4 Vegetation | 2 / 3 | 67 % | active | VG-01 and VG-02 closed; VG-03 implemented, evidence pending |
 | P5 Clouds and wind | 4 / 6 | 67 % | active | shape diversity and edge structure remain |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
@@ -121,18 +121,15 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — VG-03, foliage shading and wind.** VG-02 is closed: near-band crowns are closed volumes and the far band keeps impostors. LF-04 is closed: the clamps sat
-inside the SLS and Starship hulls, the tower always had five platforms, and the
-service arms indexed a platform a short tower does not have. All three are fixed
-and tested per family. LF-03 is closed: the trench was
-not merely covered by the deck, it was invisible because the streamed mesh cannot
-resolve a 14 m excavation at its finest LOD (610.8 m patches, 19.09 m between
-vertices — measured 0 vertices in the trench at level 13 and 1 at level 14). The
-terrain height field now carries the excavation and a new mesh cutout capability
-stops the rendered ground at the hardstand, so the pit is visible while collision
-and radar altitude keep the same surface.
+**Next task — CL-05, cloud shape and type diversity.** VG-03 is implemented:
+the deck now publishes the exact wind direction it advects with, vegetation reads
+that one vector, and sway is graded from each vertex's attachment instead of
+sliding whole cards. VG-02 is closed: near-band crowns are closed volumes and the
+far band keeps impostors. LF-04 is closed: the clamps sat inside the SLS and
+Starship hulls, the tower always had five platforms, and the service arms indexed
+a platform a short tower does not have. LF-03 is closed: the streamed mesh cannot
+resolve a 14 m excavation at its finest LOD, so a new mesh cutout stops the
+rendered ground at the hardstand while collision keeps the same surface.
 
-LF-02 is closed: the hold-down clamps floated 0.10 m and the deluge rails were
-buried 0.25 m; both are grounded, and a spawned-scene AABB test now guards every
-ground-based facility. LF-04, the vegetation geometry, clouds, resource
-invalidation and the visual suite follow.
+Evidence and the full gate are deferred to one submission pass after the
+remaining implementation slices (CL-05, CL-06, RD-01, VL-03), as requested.

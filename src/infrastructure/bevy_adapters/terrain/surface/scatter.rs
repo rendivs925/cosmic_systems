@@ -43,6 +43,17 @@ pub(super) const FULL_TREE_BUDGET_CAP: usize = TREE_CANDIDATE_SIDE * TREE_CANDID
 /// every horizontal direction without any per-frame camera facing, and stay a
 /// fraction of the cost of a full trunk/branch/canopy tree.
 pub(super) const IMPOSTOR_CARD_PLANES: usize = 2;
+/// Wind sway weight where a branch leaves the trunk. The trunk top uses the
+/// same value, so the branch cannot detach from it.
+pub(super) const BRANCH_ROOT_SWAY: f32 = 0.15;
+/// Wind sway weight at a branch tip. A crown lobe attached to the tip starts at
+/// this weight, otherwise the lobe would stay behind the branch it hangs from.
+pub(super) const BRANCH_TIP_SWAY: f32 = 0.60;
+/// Wind sway weight at the underside of a canopy volume. A crown is a mass
+/// carried above the trunk, so it travels with the branch tips, but its
+/// underside lags slightly instead of translating rigidly and shearing off the
+/// trunk.
+pub(super) const CANOPY_BASE_SWAY: f32 = 0.50;
 /// Maximum impostor cards a coarse patch can emit: the coarse lattice's
 /// candidate count (side squared), so the lattice itself bounds the count and no
 /// thinning is required.
@@ -341,7 +352,9 @@ impl MeshAccum {
             // Branches bend progressively from the trunk (0.15) to the tip, and
             // grow progressively thinner and more light-transmitting.
             let ring_t = index as f64 / (points.len() - 1).max(1) as f64;
-            let sway = (0.15 + 0.45 * ring_t) as f32;
+            let sway = (BRANCH_ROOT_SWAY as f64
+                + (BRANCH_TIP_SWAY - BRANCH_ROOT_SWAY) as f64 * ring_t)
+                as f32;
             let translucency = (0.15 + 0.70 * ring_t) as f32;
             for s in 0..=segments {
                 let a = s as f64 / segments as f64 * std::f64::consts::TAU;
@@ -503,7 +516,7 @@ impl MeshAccum {
         let half_height = height_m * 0.5;
 
         let start = self.positions.len() as u32;
-        let push_vertex = |accum: &mut Self, point: DVec3, narrow: f64, height_t: f64, u: f64| {
+        let push_vertex = |accum: &mut Self, point: DVec3, height_t: f64, u: f64| {
             let outward = (point - centre).normalize_or_zero();
             accum
                 .positions
@@ -521,8 +534,11 @@ impl MeshAccum {
             let v = v0 + (v1 - v0) * v_t;
             let uu = u0 + (u1 - u0) * u_t;
             accum.uvs.push([uu, v]);
-            accum.foliage_weights.push([1.0, 1.0]);
-            let _ = narrow;
+            // The crown is carried by the branch tips but its underside lags, so
+            // the shell bends instead of translating as a rigid block.
+            let sway =
+                CANOPY_BASE_SWAY + (1.0 - CANOPY_BASE_SWAY) * (((height_t + 1.0) * 0.5) as f32);
+            accum.foliage_weights.push([sway, 1.0]);
         };
 
         // Ring vertices, from the underside to the crown.
@@ -541,20 +557,14 @@ impl MeshAccum {
                 let point = centre
                     + radial * (radius_xz * ring_radius * jitter)
                     + up * (half_height * height_t);
-                push_vertex(
-                    self,
-                    point,
-                    ring_radius,
-                    height_t,
-                    segment as f64 / segments as f64,
-                );
+                push_vertex(self, point, height_t, segment as f64 / segments as f64);
             }
         }
         // Poles close the shell so it is a volume, not a cup.
         let bottom = self.positions.len() as u32;
-        push_vertex(self, centre - up * half_height, 0.0, -1.0, 0.0);
+        push_vertex(self, centre - up * half_height, -1.0, 0.0);
         let top = self.positions.len() as u32;
-        push_vertex(self, centre + up * half_height, 0.0, 1.0, 0.5);
+        push_vertex(self, centre + up * half_height, 1.0, 0.5);
 
         let ring_index =
             |ring: usize, segment: usize| start + (ring * segments + segment % segments) as u32;
@@ -605,6 +615,7 @@ impl MeshAccum {
         uv: [f32; 4],
         color: [f32; 3],
         volumetric_center: Option<DVec3>,
+        base_sway: f32,
     ) {
         if planes == 0 || width_m <= 0.0 || height_m <= 0.0 {
             return;
@@ -622,14 +633,17 @@ impl MeshAccum {
             let right = base + across * width_m * 0.5;
             let top = up * height_m;
             let normal = across.cross(up).normalize();
+            // The bottom edge carries the attachment's sway weight and the top
+            // edge sways fully, so a grounded plant bends instead of sliding
+            // across the ground and a crown lobe stays on its branch tip.
             let corners = [
-                (left, [u0, v1]),
-                (right, [u1, v1]),
-                (right + top, [u1, v0]),
-                (left + top, [u0, v0]),
+                (left, [u0, v1], 0.0),
+                (right, [u1, v1], 0.0),
+                (right + top, [u1, v0], 1.0),
+                (left + top, [u0, v0], 1.0),
             ];
             let start = self.positions.len() as u32;
-            for (point, uv) in corners {
+            for (point, uv, height_t) in corners {
                 self.positions
                     .push([point.x as f32, point.y as f32, point.z as f32]);
                 let vertex_normal = match volumetric_center {
@@ -646,8 +660,10 @@ impl MeshAccum {
                 ]);
                 self.colors.push([color[0], color[1], color[2], 1.0]);
                 self.uvs.push(uv);
-                // Canopy and grass cards sway fully and are the most translucent.
-                self.foliage_weights.push([1.0, 1.0]);
+                // A card is a thin leaf surface, so it is fully translucent,
+                // but its sway follows the height gradient above.
+                let sway = base_sway + (1.0 - base_sway) * height_t;
+                self.foliage_weights.push([sway, 1.0]);
             }
             self.indices.extend_from_slice(&[
                 start,
@@ -1208,6 +1224,7 @@ pub(super) fn build_grounded_vegetation_mesh(
                 canopy_uv,
                 foliage_color,
                 None,
+                0.0,
             );
             continue;
         }
@@ -1285,6 +1302,7 @@ pub(super) fn build_grounded_vegetation_mesh(
                     canopy_uv,
                     foliage_color,
                     Some(lobe_center),
+                    BRANCH_TIP_SWAY,
                 );
             }
         }
@@ -1352,6 +1370,8 @@ pub(super) fn build_grounded_vegetation_mesh(
             GRASS_UV,
             grass_color,
             None,
+            // A tuft is rooted in the ground: its base must not slide.
+            0.0,
         );
     }
 
@@ -1792,6 +1812,7 @@ mod tests {
             [0.0, 0.5, 0.5, 1.0],
             [0.2, 0.4, 0.1],
             None,
+            0.0,
         );
         let mesh = accum.into_mesh();
         let weights = match mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() {
@@ -1818,5 +1839,130 @@ mod tests {
                 "channel {channel} canopy must be one (max {max})"
             );
         }
+    }
+
+    /// VG-03: a grounded card must not slide across the terrain. Its base
+    /// carries sway weight zero and its top the full weight, so the wind bends
+    /// the tuft instead of translating it.
+    #[test]
+    fn grounded_cards_are_pinned_at_the_base() {
+        let mut accum = MeshAccum::new();
+        accum.push_cross_cards(
+            DVec3::ZERO,
+            DVec3::Y,
+            1.0,
+            1.0,
+            1,
+            0.0,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.2, 0.4, 0.1],
+            None,
+            0.0,
+        );
+        let mesh = accum.into_mesh();
+        let weights = match mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x2(values) => values,
+            other => panic!("unexpected uv1 attribute {other:?}"),
+        };
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        for (position, weight) in positions.iter().zip(weights.iter()) {
+            let expected = if position[1] <= 0.0 { 0.0 } else { 1.0 };
+            assert!(
+                (weight[0] - expected).abs() < 1e-6,
+                "corner at y={} has sway weight {}",
+                position[1],
+                weight[0]
+            );
+        }
+    }
+
+    /// VG-03: a crown lobe hangs from a moving branch tip, so its base carries
+    /// the tip's sway weight and its top sways fully.
+    #[test]
+    fn branch_lobe_cards_start_at_the_branch_tip_weight() {
+        let mut accum = MeshAccum::new();
+        accum.push_cross_cards(
+            DVec3::new(0.0, 5.0, 0.0),
+            DVec3::Y,
+            1.0,
+            1.0,
+            1,
+            0.0,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.2, 0.4, 0.1],
+            None,
+            BRANCH_TIP_SWAY,
+        );
+        let mesh = accum.into_mesh();
+        let weights = match mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x2(values) => values,
+            other => panic!("unexpected uv1 attribute {other:?}"),
+        };
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        for (position, weight) in positions.iter().zip(weights.iter()) {
+            let expected = if position[1] <= 5.0 {
+                BRANCH_TIP_SWAY
+            } else {
+                1.0
+            };
+            assert!(
+                (weight[0] - expected).abs() < 1e-6,
+                "corner at y={} has sway weight {}",
+                position[1],
+                weight[0]
+            );
+        }
+    }
+
+    /// VG-03: the crown volume must bend, not translate rigidly: its underside
+    /// sways less than its top and every weight stays in range.
+    #[test]
+    fn canopy_volume_sway_grows_from_underside_to_top() {
+        let mut accum = MeshAccum::new();
+        accum.push_canopy_volume(
+            DVec3::new(0.0, 10.0, 0.0),
+            DVec3::Y,
+            4.0,
+            5.0,
+            0.0,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.2, 0.4, 0.1],
+            7,
+        );
+        let mesh = accum.into_mesh();
+        let weights = match mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x2(values) => values,
+            other => panic!("unexpected uv1 attribute {other:?}"),
+        };
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            bevy_mesh::VertexAttributeValues::Float32x3(values) => values,
+            other => panic!("unexpected position attribute {other:?}"),
+        };
+        let mut lowest = f32::INFINITY;
+        let mut highest = f32::MIN;
+        for (position, weight) in positions.iter().zip(weights.iter()) {
+            assert!((0.0..=1.0).contains(&weight[0]));
+            if position[1] <= 7.6 {
+                lowest = lowest.min(weight[0]);
+            }
+            if position[1] >= 12.4 {
+                highest = highest.max(weight[0]);
+            }
+        }
+        assert!(
+            lowest < highest,
+            "the crown must bend: bottom {lowest} vs top {highest}"
+        );
+        assert!(
+            (lowest - CANOPY_BASE_SWAY).abs() < 1e-5,
+            "the underside must use the base weight"
+        );
+        assert!((highest - 1.0).abs() < 1e-5, "the top must sway fully");
     }
 }

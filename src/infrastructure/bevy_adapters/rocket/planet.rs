@@ -23,7 +23,7 @@ use crate::domain::services::terrain_source::ElevationBounds;
 use crate::domain::value_objects::atmospheric_optics::AtmosphericOptics;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
-use crate::infrastructure::bevy_adapters::climate::MeasuredClimate;
+use crate::infrastructure::bevy_adapters::climate::{MeasuredClimate, PresentationWind};
 use crate::infrastructure::bevy_adapters::entity_components::*;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use crate::infrastructure::bevy_adapters::physical_scale::PhysicalScale;
@@ -704,6 +704,7 @@ pub fn update_rocket_clouds(
     time: Res<Time>,
     rocket_query: Query<&RocketPhysicsState, PrimaryVehicle>,
     measured_climate: Option<Res<MeasuredClimate>>,
+    mut presentation_wind: ResMut<PresentationWind>,
     simulation_time: Res<SimulationTime>,
     planet_query: Query<&PlanetComponent>,
     camera_query: Query<
@@ -851,12 +852,20 @@ pub fn update_rocket_clouds(
             };
             if let Some((latitude_deg, longitude_deg, sample)) = measured {
                 match layer {
-                    RocketCloudLayer::Low => apply_measured_cloud_climate(
-                        &mut material.params,
-                        sample,
-                        latitude_deg,
-                        longitude_deg,
-                    ),
+                    RocketCloudLayer::Low => {
+                        // The deck's advection vector is the authoritative
+                        // presentation wind: publish exactly what was applied so
+                        // the vegetation sway cannot pick a different direction.
+                        let (wind_x, wind_z) = apply_measured_cloud_climate(
+                            &mut material.params,
+                            sample,
+                            latitude_deg,
+                            longitude_deg,
+                        );
+                        presentation_wind.direction_body_fixed = Vec3::new(wind_x, 0.0, wind_z);
+                        presentation_wind.surface_speed_mps = sample.wind_speed_mps() as f32;
+                        presentation_wind.measured = true;
+                    }
                     RocketCloudLayer::Cirrus => apply_measured_cirrus_climate(
                         &mut material.params,
                         sample,
@@ -888,11 +897,12 @@ fn apply_measured_cloud_climate(
     sample: crate::domain::services::climate::ClimateSample,
     latitude_deg: f64,
     longitude_deg: f64,
-) {
+) -> (f32, f32) {
     params.coverage = (sample.cloud_fraction as f32).clamp(0.02, 0.95);
     params.wind_speed = (sample.wind_speed_mps() as f32 * 2.5).clamp(2.0, 60.0);
     let (x, z) = sample.wind_direction_xz(latitude_deg, longitude_deg);
     params.wind_direction = Vec2::new(x, z);
+    (x, z)
 }
 
 /// Map a measured climatology sample onto the high cirrus veil. Upper-air cloud
@@ -963,11 +973,14 @@ mod tests {
             wind_north_mps: 0.0,
             cloud_fraction: 0.72,
         };
-        apply_measured_cloud_climate(&mut params, sample, 0.0, 0.0);
+        // VG-03: the helper returns the direction it applied, so the cloud
+        // deck and the shared vegetation wind cannot diverge.
+        let (x, z) = apply_measured_cloud_climate(&mut params, sample, 0.0, 0.0);
         assert!((params.coverage - 0.72).abs() < 1e-6);
         assert!((params.wind_speed - 20.0).abs() < 1e-6);
         assert!((params.wind_direction.x - 0.0).abs() < 1e-6);
         assert!((params.wind_direction.y - 1.0).abs() < 1e-6);
+        assert_eq!((x, z), (params.wind_direction.x, params.wind_direction.y));
     }
 
     #[test]

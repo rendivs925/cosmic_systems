@@ -35,7 +35,7 @@ over with a new duplicate spec.
 | TM-04 near-ground albedo tone | `planetary-terrain-material`, `terrain-material-splat`, `scientific-lighting` | — | tone continuity between the measured overview and the layered material |
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | — | archived `2026-11-07-stabilize-far-field-tree-placement` and `2026-11-07-audit-vegetation-distribution` (sea-datum exclusion, versioned identity) |
 | VG-02 canopy | `vegetation-placement` | — | archived `2026-11-08-volumetric-canopy` |
-| VG-03 wind and shading | `vegetation-species` | — | |
+| VG-03 wind and shading | `vegetation-presentation` | active `2026-11-08-foliage-wind` | |
 | CL-01…06 clouds | — | — | **gap**: requirements live in `docs/technical_specification_photorealistic_procedural_3d_cloud_engine.md`, not in OpenSpec |
 | AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |

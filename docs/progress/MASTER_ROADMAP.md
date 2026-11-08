@@ -1157,6 +1157,52 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** committed and pushed in `8d8d46b`; OpenSpec change
   `2026-11-08-volumetric-canopy` archived.
 
+### VG-03 — Foliage shading and GPU wind
+- **Status:** IMPLEMENTED
+- **Priority:** P3
+- **Objective:** Give foliage translucency and a wind response driven by the same
+  wind field as the clouds.
+- **Dependencies:** VG-02, CL-02.
+- **Subsystems:** vegetation material, vegetation scatter, shared presentation
+  wind.
+- **Expected files:** `assets/shaders/vegetation.wgsl`,
+  `assets/shaders/vegetation_prepass.wgsl`,
+  `terrain/vegetation_material.rs`, `terrain/surface/scatter.rs`.
+- **Defects found (audit):**
+  1. The vegetation wind was a hard-coded `(0.82, 0, 0.57)` constant with a
+     fixed amplitude, while the deck advected on a measured sample. Foliage and
+     clouds could point different ways at the same place and time.
+  2. Every crossed-card corner carried sway weight `1.0`, so grass tufts and
+     far-field impostors slid across the ground by the full canopy amplitude,
+     and the new volumetric crowns translated rigidly and sheared off the trunk.
+- **Implementation:** the cloud mapping returns the exact direction it applies
+  and publishes it to a `PresentationWind` resource; the vegetation system reads
+  that vector and derives displacement and rate from the measured surface speed
+  (`clamp(0.035·v, 0.10, 1.0)` m, `clamp(0.9 + 0.07·v, 0.8, 3.2)` rad/s, which
+  reproduces the tuned 0.35 m and 1.6 rad/s at the 10 m/s fallback). Card sway is
+  graded from the attachment weight to 1.0 (0 for grounded tufts and impostors,
+  the 0.60 branch-tip weight for crown lobes); canopy volumes grade 0.50 → 1.0.
+  Translucency stays per-vertex and zero for woody geometry.
+- **Rationale recorded:** direction is shared exactly; speed is not. The deck is
+  advected at 2.5× the measured 2 m wind as mid-tropospheric advection, while
+  foliage feels the surface wind. A vertical speed difference is physical; a
+  direction difference would be a defect.
+- **Tests:** `fallback_wind_speed_reproduces_the_default_sway`,
+  `sway_follows_surface_wind_and_is_bounded`, `grounded_cards_are_pinned_at_the_base`,
+  `branch_lobe_cards_start_at_the_branch_tip_weight`,
+  `canopy_volume_sway_grows_from_underside_to_top`; the shader field-order and
+  prepass-parity guards are unchanged.
+- **Visual evidence:** pending, captured in the submission pass.
+- **Performance:** one shared uniform write per frame; no mesh rebuild. The
+  vertex stage already existed, so the cost is unchanged.
+- **Scientific validation:** the wind source is the measured MERRA-2 monthly
+  climatology. Monthly means are vector-averaged and deliberately suppress
+  gustiness, so the canopy amplitude is small (0.10–0.17 m) by construction.
+- **Risks:** the monthly mean is not a gust field; the sway reads as a gentle
+  drift rather than a gusty flutter.
+- **Completion evidence:** implementation committed; OpenSpec change
+  `2026-11-08-foliage-wind` open until the submission pass.
+
 ---
 
 ## Phase P5 — Clouds and wind
