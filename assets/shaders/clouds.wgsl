@@ -29,6 +29,7 @@
 #import "shaders/cloud_density.wgsl"::saturate
 #import "shaders/cloud_density.wgsl"::sample_density
 #import "shaders/cloud_density.wgsl"::density_lod
+#import "shaders/cloud_density.wgsl"::footprint_lod
 #import "shaders/sky_radiance.wgsl"::SkyParams
 #import "shaders/sky_radiance.wgsl"::sky_radiance_direction
 
@@ -105,6 +106,16 @@ const MAX_MULTI_OCTAVES: u32 = 4u;
 // breaks ray-march banding without turning the deck into static.
 fn interleaved_gradient_noise(p: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
+}
+
+/// World-space size of one pixel at `distance_m` from the camera.
+///
+/// `clip_from_view[1][1]` is the vertical focal term `1 / tan(fov_y / 2)` for a
+/// perspective projection, and `view.viewport.w` is the framebuffer height, so
+/// one pixel subtends `2 * tan(fov_y / 2) / height` radians.
+fn pixel_footprint_m(distance_m: f32) -> f32 {
+    let tan_half_fov = 1.0 / max(view.clip_from_view[1][1], 1e-6);
+    return 2.0 * tan_half_fov * distance_m / max(view.viewport.w, 1.0);
 }
 
 // Density-relevant subset of the cloud material uniform, in the shared field's
@@ -259,7 +270,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> CloudFra
     // A step through a distant deck spans kilometres, so the volume is sampled
     // at the level that step resolves. Without this the limb aliases into
     // blocky white silhouettes, because consecutive steps jump whole cells.
-    let lod = density_lod(field, step_size);
+    // The step resolves the field along the ray; the pixel footprint resolves
+    // it across the screen. At altitude a short step can still cover several
+    // pixels of deck, and sampling the finest mip there aliases cloud edges into
+    // per-pixel speckle. Take the coarser of the two.
+    let footprint = pixel_footprint_m(0.5 * (segment_start + segment_end));
+    let lod = max(density_lod(field, step_size), footprint_lod(field, footprint));
     // Mild per-pixel dither (amplitude < a full step) breaks banding without
     // the static that full white-noise jitter produces at these step counts.
     let jitter = interleaved_gradient_noise(in.position.xy);

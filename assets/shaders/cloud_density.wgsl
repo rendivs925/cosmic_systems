@@ -111,7 +111,14 @@ fn height_profile(height_fraction: f32, cloud_type: f32) -> f32 {
 fn weather_coverage(field: CloudField, weather_rank: f32) -> f32 {
     let fraction = saturate(field.coverage);
     let clear_below = 1.0 - fraction;
-    return saturate((weather_rank - clear_below) / max(fraction, 0.02));
+    let band = saturate((weather_rank - clear_below) / max(fraction, 0.02));
+    // Resolved edge: the old linear ramp crossed from clear air to full coverage
+    // at a constant rate, so its first texel was already a fifth of the way in
+    // and sub-pixel rank noise read as a hard cut. The smoothstep keeps the same
+    // endpoints and the same mean over a uniform rank, but its first quarter of
+    // the band is the soft edge (`coverage * 0.25`), and the interior reaches
+    // the dense core gradually.
+    return smoothstep(0.0, 1.0, band);
 }
 
 // How far the density field is stretched along the wind. Convection in the
@@ -152,6 +159,25 @@ fn stretch_along_wind(p: vec3<f32>, wind: vec2<f32>, stretch: f32) -> vec3<f32> 
 /// level is not clamped from above: past the last mip the sampler returns the
 /// mean, which is exactly the right answer for a deck that no longer has
 /// resolvable structure.
+// Texels along one edge of the base noise volume. Must match `BASE_NOISE_RES`
+// in `domain/services/cloud_noise.rs`; a mismatch would make the footprint
+// filter blur the wrong scale. Guarded by a Rust test.
+const CLOUD_BASE_NOISE_RES: f32 = 64.0;
+
+/// Mip level that averages the field to the size of one screen pixel.
+///
+/// `density_lod` is driven by the ray step and knows only the feature size. At
+/// altitude the step through a nadir deck is short while a pixel covers
+/// kilometres, so the finest mips alias and cloud edges break into per-pixel
+/// speckle. This level is derived from the pixel footprint instead: at the
+/// equator the base texel is `1 / (noise_scale * CLOUD_BASE_NOISE_RES)` metres,
+/// so a pixel covering `footprint_m` needs `log2(footprint / texel)` mips.
+/// Up close the footprint is smaller than a texel and this returns zero.
+fn footprint_lod(field: CloudField, footprint_m: f32) -> f32 {
+    let texel_m = 1.0 / max(field.noise_scale * CLOUD_BASE_NOISE_RES, 1e-9);
+    return max(log2(max(footprint_m / texel_m, 1.0)), 0.0);
+}
+
 fn density_lod(field: CloudField, step_m: f32) -> f32 {
     let cell_m = 1.0 / max(field.noise_scale * 6.0, 1e-9);
     return max(log2(max(step_m / cell_m, 1.0)), 0.0);
@@ -245,7 +271,7 @@ fn sample_density(
     );
     // Cell-size spectrum. The base volume's green/blue/alpha channels are Worley
     // octaves at 6/12/24 cells across the tile, so one fetch already carries
-    // three cloud-cell sizes (roughly 3, 1.5 and 0.75 km at the Earth deck).
+    // three cloud-cell sizes (roughly 4.5, 2.25 and 1.1 km at the Earth deck).
     // Re-weighting them changes the dominant cell size without moving the sample
     // coordinate - a coordinate warp was tried and produced swirls - and without
     // another fetch.

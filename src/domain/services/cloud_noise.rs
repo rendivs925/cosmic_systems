@@ -478,12 +478,17 @@ mod tests {
     /// sky that carries cloud. The previous `fraction * rank * 1.4` product
     /// turned a mid-latitude fraction into near-total cover because the rank
     /// distribution then clustered around its mean.
+    ///
+    /// CL-06 wraps the band in a smoothstep. The endpoints and the mean over a
+    /// uniform rank are unchanged, so the measured share still holds, but the
+    /// lower quarter of the band is the soft edge instead of an immediate cut.
     #[test]
     fn coverage_selects_the_measured_share_of_the_sky() {
         fn weather_coverage(fraction: f32, rank: f32) -> f32 {
             let fraction = fraction.clamp(0.0, 1.0);
             let clear_below = 1.0 - fraction;
-            ((rank - clear_below) / fraction.max(0.02)).clamp(0.0, 1.0)
+            let band = ((rank - clear_below) / fraction.max(0.02)).clamp(0.0, 1.0);
+            band * band * (3.0 - 2.0 * band)
         }
         for fraction in [0.05, 0.2, 0.5, 0.72, 0.95] {
             let samples = 1000u32;
@@ -501,6 +506,32 @@ mod tests {
         assert_eq!(weather_coverage(0.0, 1.0), 0.0);
         assert_eq!(weather_coverage(1.0, 1.0), 1.0);
         assert_eq!(weather_coverage(1.0, 0.0), 0.0);
+    }
+
+    /// CL-06: the first quarter of the coverage band must be a resolved ramp,
+    /// not a linear cut, while the band's mean stays put so the measured share
+    /// does not move.
+    #[test]
+    fn coverage_edge_is_a_resolved_quarter_band() {
+        fn band_curve(t: f32) -> f32 {
+            t * t * (3.0 - 2.0 * t)
+        }
+        // Within the first quarter the curve is below the old linear ramp, so
+        // the transition is soft rather than immediate.
+        assert!(band_curve(0.05) < 0.01);
+        assert!(band_curve(0.25) < 0.20);
+        assert!(band_curve(0.25) > 0.10);
+        // Endpoints are exact, so clear air and the dense core are unchanged.
+        assert_eq!(band_curve(0.0), 0.0);
+        assert_eq!(band_curve(1.0), 1.0);
+        // The mean over the band is 0.5, the same as the linear ramp, which is
+        // why the bright share is anchored.
+        let samples = 10_000;
+        let mean = (0..samples)
+            .map(|i| band_curve(i as f32 / samples as f32))
+            .sum::<f32>()
+            / samples as f32;
+        assert!((mean - 0.5).abs() < 0.001, "band mean is {mean}");
     }
 
     #[test]

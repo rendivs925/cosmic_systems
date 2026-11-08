@@ -1286,7 +1286,7 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Expected files:** `assets/shaders/cloud_density.wgsl`,
   `src/domain/services/cloud_noise.rs`.
 - **Implementation:** `sample_density` re-weights the base volume's Worley
-  octaves (6/12/24 cells, about 3/1.5/0.75 km at the Earth deck) with a scalar
+  octaves (6/12/24 cells, about 4.5/2.25/1.1 km at the Earth deck) with a scalar
   selector built from the weather map's smooth alpha channel (regional bias) and
   the coarse Worley channel (per-cell variation). The blend is anchored at the
   existing carve: selector zero is the old field exactly, so the coverage
@@ -1307,6 +1307,46 @@ timings. This phase exists because an unverifiable change is not a change.
   follows the blend. Measured in the submission pass.
 - **Completion evidence:** implementation committed; OpenSpec change
   `2026-11-08-cloud-cell-spectrum` open until the submission pass.
+
+### CL-06 — Edge structure
+- **Status:** IMPLEMENTED
+- **Priority:** P2
+- **Objective:** Replace the salt-and-pepper cloud edges with resolved erosion.
+- **Dependencies:** CL-05.
+- **Subsystems:** cloud density and march.
+- **Expected files:** `assets/shaders/cloud_density.wgsl`,
+  `assets/shaders/clouds.wgsl`.
+- **Defects found (audit):**
+  1. The coverage band ramped linearly from clear air to full coverage, so its
+     first texel was already a fifth of the way in; sub-pixel rank noise read as
+     a hard cut.
+  2. The volume mip came only from the ray step. At altitude a step through a
+     nadir deck is short while one pixel covers kilometres, so the finest mips
+     aliased into per-pixel speckle.
+- **Implementation:** the coverage band is wrapped in a smoothstep (`band²(3 −
+  2·band)`), which preserves the endpoints and the mean at 0.5, so the measured
+  share and the clear-air threshold do not move while the lower quarter of the
+  band (about `coverage * 0.25`) becomes the resolved edge. The march now uses
+  `max(density_lod(step), footprint_lod(footprint))`, where the footprint is
+  `2·tan(fov/2)·distance / viewport_height`; at 1,200 km that averages about 2.2
+  mips, and at ground level the footprint is below one 422 m texel so the level
+  is zero and the near deck is untouched.
+- **Rejected approach recorded:** sharpening without a top-height field was
+  rejected once before; this change does not sharpen the density, it filters it
+  to what the pixel can resolve.
+- **Tests:** `coverage_edge_is_a_resolved_quarter_band`,
+  `coverage_selects_the_measured_share_of_the_sky` (updated smoothstep mirror),
+  `cloud_march_filters_to_the_pixel_footprint` (constant match, coarser level,
+  view-derived footprint).
+- **Visual evidence:** pending, captured in the submission pass.
+- **Performance:** one `pixel_footprint_m` per fragment and one `max`; no extra
+  fetch and no extra march step.
+- **Scientific validation:** none; presentation. The edge width is a filter
+  width, not a measured quantity.
+- **Risks:** mip-averaging flattens density contrast, so a distant deck may read
+  slightly thinner; that is preferred to aliasing.
+- **Completion evidence:** implementation committed; OpenSpec change
+  `2026-11-08-cloud-edge-structure` open until the submission pass.
 
 ---
 

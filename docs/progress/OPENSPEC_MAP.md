@@ -36,7 +36,7 @@ over with a new duplicate spec.
 | VG-01 distribution | `vegetation-land-cover`, `vegetation-placement`, `vegetation-species` | — | archived `2026-11-07-stabilize-far-field-tree-placement` and `2026-11-07-audit-vegetation-distribution` (sea-datum exclusion, versioned identity) |
 | VG-02 canopy | `vegetation-placement` | — | archived `2026-11-08-volumetric-canopy` |
 | VG-03 wind and shading | `vegetation-presentation` | active `2026-11-08-foliage-wind` | |
-| CL-01…06 clouds | `cloud-deck` | active `2026-11-08-cloud-cell-spectrum` | gap closed for the density, coverage, type, wind and LOD requirements; the cloud engine's lighting/aerial-perspective behaviour still lives only in the technical specification |
+| CL-01…06 clouds | `cloud-deck` | active `2026-11-08-cloud-cell-spectrum`, `2026-11-08-cloud-edge-structure` | gap closed for the density, coverage, type, wind and LOD requirements; the cloud engine's lighting/aerial-perspective behaviour still lives only in the technical specification |
 | AT-01 sky | `atmosphere`, `rocket-flight-presentation` | — | |
 | AT-02 altitude/limb | `atmosphere`, `rocket-flight-presentation` | — | continuous sky/fog transition is specified; limb thickness is visual evidence, not a separate requirement |
 | AT-03 high-altitude darkness | `atmosphere`, `scientific-lighting` | — | |

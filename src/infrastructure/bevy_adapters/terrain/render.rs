@@ -3873,6 +3873,56 @@ mod tests {
         );
     }
 
+    /// CL-06: a distant deck must be low-pass filtered to the pixel footprint,
+    /// not only to the ray step. The step through a nadir deck is short while a
+    /// pixel covers kilometres, so sampling the finest mip there aliases the
+    /// edges into per-pixel speckle. The footprint level is derived from the
+    /// view projection, so it costs no extra fetch.
+    #[test]
+    fn cloud_march_filters_to_the_pixel_footprint() {
+        let module = include_str!("../../../../assets/shaders/cloud_density.wgsl");
+        let deck = include_str!("../../../../assets/shaders/clouds.wgsl");
+        assert!(
+            module.contains("fn footprint_lod("),
+            "the density field has no pixel-footprint filter"
+        );
+        assert!(
+            deck.contains("fn pixel_footprint_m(") && deck.contains("view.clip_from_view[1][1]"),
+            "the deck does not derive the footprint from the view projection"
+        );
+        assert!(
+            deck.contains("max(density_lod(field, step_size), footprint_lod(field, footprint))"),
+            "the march must take the coarser of the step and footprint levels"
+        );
+        // The constant must match the generator, or the filter blurs the wrong
+        // scale by a power of two.
+        let shader_res = module
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("const CLOUD_BASE_NOISE_RES: f32 =")
+                    .and_then(|rest| rest.trim_end_matches(';').trim().parse::<f32>().ok())
+            })
+            .expect("CLOUD_BASE_NOISE_RES is missing or not a literal");
+        assert_eq!(
+            shader_res as usize,
+            crate::domain::services::cloud_noise::BASE_NOISE_RES,
+            "the shader's base-noise resolution drifted from the generator"
+        );
+        // Mirror of `footprint_lod`: one level per doubling of the footprint
+        // beyond one texel, and zero while a pixel is smaller than a texel.
+        fn footprint_lod(noise_scale: f32, footprint_m: f32) -> f32 {
+            let texel_m = 1.0 / (noise_scale * 64.0).max(1e-9);
+            (footprint_m / texel_m).max(1.0).log2().max(0.0)
+        }
+        let earth_deck = 1.0 / (4_500.0 * 6.0);
+        // One tile is 27 km wide and 64 texels across, so a texel is 421.9 m.
+        assert_eq!(footprint_lod(earth_deck, 100.0), 0.0);
+        assert!((footprint_lod(earth_deck, 421.9) - 0.0).abs() < 0.01);
+        assert!((footprint_lod(earth_deck, 843.8) - 1.0).abs() < 0.01);
+        assert!((footprint_lod(earth_deck, 3_375.0) - 3.0).abs() < 0.01);
+    }
+
     /// CL-05: one deck must hold more than one cell size. The base volume's
     /// green/blue/alpha channels are Worley octaves at 6/12/24 cells, so the
     /// size spectrum is a re-weighting of one fetch. A coordinate warp was tried
