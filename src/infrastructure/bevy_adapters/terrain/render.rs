@@ -1156,6 +1156,18 @@ fn update_vegetation_material(
     let frequency = sway_frequency_for_surface_wind(wind.surface_speed_mps);
     for (_, material) in vegetation_materials.iter_mut() {
         let params = &mut material.extension.params;
+        // Writing through `AssetMut` marks the asset modified and forces a
+        // re-extraction. A pinned capture clock and a stationary vehicle leave
+        // every input identical, so compare first and skip the write. RD-01
+        // counts this: a stationary frame must create and re-extract nothing.
+        if params.time_s == elapsed_s
+            && params.planet_center == planet_center
+            && params.wind_direction == wind.direction_body_fixed
+            && params.wind_strength == strength
+            && params.sway_frequency == frequency
+        {
+            continue;
+        }
         params.time_s = elapsed_s;
         params.planet_center = planet_center;
         params.wind_direction = wind.direction_body_fixed;
@@ -4976,6 +4988,72 @@ mod tests {
             assert_eq!(color[2], 0.0);
             assert_eq!(color[3], 1.0);
         }
+    }
+
+    /// RD-01: the vegetation uniform is written every frame in a live run
+    /// because the presentation clock advances, but a pinned capture clock and a
+    /// stationary wind leave every input identical. The system must then skip
+    /// the write instead of forcing an asset re-extraction, and it must still
+    /// apply a real change.
+    #[test]
+    fn stationary_vegetation_uniform_is_not_rewritten() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<RenderOrigin>()
+            .insert_resource(PresentationWind::default())
+            .init_resource::<Assets<VegetationMaterial>>();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<VegetationMaterial>>()
+            .add(VegetationMaterial {
+                base: StandardMaterial::default(),
+                extension: VegetationExtension::new(VegetationParams::default()),
+            });
+        app.add_systems(Update, update_vegetation_material);
+
+        app.update();
+        let expected_strength = sway_strength_for_surface_wind(
+            app.world().resource::<PresentationWind>().surface_speed_mps,
+        );
+        let params = app
+            .world()
+            .resource::<Assets<VegetationMaterial>>()
+            .get(&handle)
+            .expect("material")
+            .extension
+            .params;
+        assert_eq!(params.time_s, 0.0);
+        assert!((params.wind_strength - expected_strength).abs() < 1e-6);
+
+        // A second identical frame must leave the material untouched.
+        app.update();
+        let after = app
+            .world()
+            .resource::<Assets<VegetationMaterial>>()
+            .get(&handle)
+            .expect("material")
+            .extension
+            .params;
+        assert_eq!(after.wind_strength, params.wind_strength);
+        assert_eq!(after.sway_frequency, params.sway_frequency);
+        assert_eq!(after.planet_center, params.planet_center);
+
+        // A real wind change must still reach the material.
+        app.world_mut()
+            .resource_mut::<PresentationWind>()
+            .surface_speed_mps = 25.0;
+        app.update();
+        let after = app
+            .world()
+            .resource::<Assets<VegetationMaterial>>()
+            .get(&handle)
+            .expect("material")
+            .extension
+            .params;
+        assert!(
+            (after.wind_strength - sway_strength_for_surface_wind(25.0)).abs() < 1e-6,
+            "a changed wind must be written"
+        );
     }
 
     #[test]

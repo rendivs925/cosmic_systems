@@ -43,7 +43,7 @@ over with a new duplicate spec.
 | AT-04 multiple-scattering horizon | `scientific-lighting` | — | added and archived `2026-11-05-add-sky-multiple-scattering`: bounded, luminance-preserving diffuse fill with an explicit energy bound and unchanged limb e-folding |
 | RK-01 attitude/staging | `rocket-flight-presentation`, `rocket-dynamics`, `staging-recovery` | — | change `2026-11-06-audit-rocket-attitude-staging`: debris render snapshots, stage-centred mesh frame, attitude preservation |
 | RK-02 plume | `rocket-engine-effects`, `flight-presentation-effects` | — | change `2026-11-07-drive-plume-from-propulsion-state`: mass-flow intensity, expansion length, gimbaled direction, recovering-stage effects |
-| RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | |
+| RD-01 invalidation | `terrain-rendering`, `terrain-lod` | active `2026-11-08-resource-invalidation-audit` | every per-frame system classified; the vegetation uniform no longer rewrites unchanged inputs |
 | RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | culling, LOD reconcile and the upload burst are timed separately; GPU upload completion is still unexposed and not claimed |
 | RD-03 shadow lifecycle | `terrain-lighting-occlusion` | — | |
 | VL-01 smoke | `scientific-validation` | — | |

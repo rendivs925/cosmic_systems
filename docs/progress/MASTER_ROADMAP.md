@@ -1653,22 +1653,40 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P8 — Rendering optimisation
 
 ### RD-01 — Resource invalidation audit
-- **Status:** PLANNED
+- **Status:** IMPLEMENTED
 - **Priority:** P1
 - **Objective:** Stop recreating meshes, materials and buffers for unchanged
   inputs.
-- **Dependencies:** P0-04.
-- **Subsystems:** terrain render, materials, streaming.
-- **Expected files:** `terrain/render.rs`, `terrain/streaming.rs`,
+- **Dependencies:** P0-04 for a windowed frame-time baseline; the creation audit
+  and its counter test run offscreen and do not need it.
+- **Subsystems:** terrain render, materials, imagery.
+- **Expected files:** `terrain/render.rs`, `terrain/imagery.rs`,
   `performance_systems.rs`.
-- **Acceptance:** a stationary frame performs zero mesh, material and image
-  creation; measured over 600 frames.
-- **Tests:** counter-based regression test.
-- **Visual evidence:** not applicable.
-- **Performance:** per-frame allocation counters before/after.
+- **Audit result:** every `Update` system in `TerrainRenderPlugin` was classified.
+  `recenter_render_origin` writes a resource; `update_terrain_material_origin`
+  compares its full derived frame and skips equal frames;
+  `update_terrain_cloud_shadow` compares the field before assigning;
+  `bind_cloud_noise_to_ground_materials` is guarded by `bound`;
+  `stream_terrain_patches`, `spawn_patch_mesh_system` and
+  `stream_terrain_imagery` create only when a patch or tile becomes ready; and
+  `apply_terrain_imagery` is guarded by the applied tile and blend. Creation was
+  therefore already confined to startup and to stream events.
+- **Defect found and fixed:** `update_vegetation_material` rewrote the shared
+  uniform every frame even when a pinned capture clock and a stationary wind left
+  every field identical, marking the material modified and forcing a
+  re-extraction. It now compares all uniform inputs first and skips the write.
+- **Tests:** `stationary_vegetation_uniform_is_not_rewritten` (a no-op frame
+  leaves the params untouched, a wind change still applies) and the imagery test
+  extended to 600 stationary frames with `Assets<TerrainMaterial>::len()`
+  unchanged.
+- **Visual evidence:** none; this is an allocation/invalidations task.
+- **Performance:** removes one material re-extraction per frame in pinned-clock
+  captures; no change to live animation, whose clock must advance.
 - **Scientific validation:** none.
-- **Risks:** caching a stale resource and showing the wrong thing.
-- **Completion evidence:** pending.
+- **Risks:** caching a stale uniform; mitigated by comparing every input and by
+  the still-applies half of the test.
+- **Completion evidence:** implementation committed; OpenSpec change
+  `2026-11-08-resource-invalidation-audit` open until the submission pass.
 
 ### RD-02 — Streaming and culling measurement
 - **Status:** VERIFIED

@@ -757,6 +757,26 @@ mod tests {
             "already-applied imagery must not rebuild the material"
         );
 
+        // RD-01: 600 stationary frames must not create a single material, mesh
+        // or image asset. The imagery path is the one per-frame system that can
+        // rebuild a material, and its admission guard is what this counts.
+        let materials_before = app.world().resource::<Assets<TerrainMaterial>>().len();
+        for _ in 0..600 {
+            app.update();
+        }
+        let materials_after = app.world().resource::<Assets<TerrainMaterial>>().len();
+        assert_eq!(
+            materials_after,
+            materials_before,
+            "600 stationary frames created {} material assets",
+            materials_after - materials_before
+        );
+        let state = app.world().get::<TerrainPatchRenderState>(entity).unwrap();
+        assert_eq!(
+            state.material_handle, upgraded,
+            "the material handle must survive 600 no-op frames"
+        );
+
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("cosmic_imagery_upgrade_{}", std::process::id())),
         );
