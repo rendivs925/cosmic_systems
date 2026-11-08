@@ -793,41 +793,62 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Completion evidence:** `1ea0895`; the test plus the ground frame.
 
 ### LF-03 — Flame trench and deflector visible and grounded
-- **Status:** IN_PROGRESS
+- **Status:** VERIFIED
 - **Priority:** P2
 - **Objective:** Make the trench and deflector read as cut into the pad rather than
   buried under it.
 - **Dependencies:** LF-02.
-- **Subsystems:** launch presentation, terrain grading.
-- **Expected files:** `src/application/rocket_spawning.rs`,
-  `src/domain/services/terrain_source/{procedural,layered,catalog}.rs`.
+- **Subsystems:** launch presentation, terrain grading, terrain mesh.
+- **Evidence commit:** `aa7da40`.
 - **Acceptance:** the trench opening is visible from the chase camera; nothing
   floats below the pad plane.
-- **Defect found (audit):** the roadmap entry said the deck covered the trench.
-  That was true but incomplete — the terrain is graded level across the whole
-  110 m pad, so the old trench's top face sat 0.05 m *below grade* and every
-  trench and deflector vertex was behind the terrain surface. Opening the deck
-  alone would have exposed flat ground. The deck was not the only occluder.
-- **Implementation so far:** one rectangular excavation per graded Earth pad in
-  the terrain authority (`PadTrenchZone`, applied after the site grade, with the
-  declared bounds extended), apron/deck split into frames around the mouth, a
-  concrete floor plus four walls, and an inclined steel deflector resting on the
-  floor below the pad plane. The mouth starts 9 m from the launch point so the
-  ±5 m surface-normal stencil stays on grade; at 4.5 m the normal under the
-  vehicle tilted and two landing tests failed.
+- **Defects found (audit), in order:**
+  1. The roadmap entry said the deck covered the trench. True but incomplete: the
+     terrain is graded level across the whole 110 m pad, so the old solid trench
+     box sat 0.05 m *below grade* and every trench vertex was behind the terrain.
+     Opening the deck alone would have exposed flat ground.
+  2. Lowering the height field was still not enough. The finest streamed Earth
+     patch is 610.8 m across at 33 samples — 19.09 m between vertices — so a
+     14 m trench receives at most one vertex (measured at the real Starbase
+     patch: **0** at level 13, **1** at level 14, at the far corner) and the mesh
+     interpolates straight back to grade. A below-grade pit under a continuous
+     surface cannot render, whatever the height field says.
+  3. The lining rim topped out at exactly grade, coplanar with the graded ground
+     and the sea cap, so it z-fought and let slivers of grass through the edge.
+- **Implementation:**
+  - `PadTrenchZone` cuts one rectangular excavation per graded Earth pad after
+    the site grade; declared elevation bounds subtract the deepest cut.
+  - `TerrainMeshCutout` declares a body-fixed cap that a structure covers, and
+    the patch builder drops a cell only when all four corners lie inside it — so
+    the hole is a subset of the cap, and coarse patches are never cut. A
+    `TerrainMeshCutouts` resource carries the active cap into every bake request;
+    the height field, collision and radar altitude are untouched.
+  - The 110 m hardstand is built from overlapping frames (sharing an edge left a
+    sub-pixel crack), the lining rim meets the pad plane, every rim part straddles
+    its opening edge, and the inclined steel deflector rests on the trench floor.
+  - The mouth starts 9 m from the launch point so `surface_normal`'s ±5 m stencil
+    stays on grade; at 4.5 m the normal under the vehicle tilted and two landing
+    tests failed.
 - **Tests:** `pad_trench_cut_is_full_inside_and_blends_to_grade`,
   `site_trench_cuts_the_pad_but_not_the_launch_point`,
-  `spawned_flame_trench_is_open_and_grounded`.
-- **Open issue:** the excavation is present in `height_m` and `mesh_height_m`
-  (measured −5 m at LOD 5 and 12) but the nadir capture still shows ground at
-  the trench footprint, so the lining and deflector are hidden. The render path
-  or the local patch LOD is unresolved — the slice is **not** verified.
-- **Visual evidence:** pending.
-- **Performance:** none.
+  `spawned_flame_trench_is_open_and_grounded`,
+  `mesh_cutout_omits_only_cells_inside_the_cap`,
+  `mesh_cutout_leaves_coarse_patches_whole`,
+  `launch_site_mesh_is_cut_under_the_hardstand`.
+- **Visual evidence:** `2026-11-08-lf03-starbase-trench-oblique.jpg` (20 m, 50°
+  pitch, looking south) and `2026-11-08-lf03-starbase-trench-nadir.jpg` (34 m
+  nadir). Both show a lined rectangular excavation with the deflector on its
+  floor. The 240-frame chase view is *not* usable evidence on its own: at ~200 m
+  the opening is about 20×27 px.
+- **Performance:** none. The cutout removes at most a handful of triangles per
+  patch and adds no per-frame work.
 - **Scientific validation:** presentation only; not claimed as a surveyed model.
-- **Risks:** overlapping the deck and z-fighting; the trench is a bounded pit,
-  not a duct to the pad edge.
-- **Completion evidence:** pending.
+- **Risks / limits:** the trench is a bounded pit, not a duct to the pad edge.
+  A ~0.4 m sliver of the sea cap remains visible at one trench corner, where the
+  cut exposes ground that sits close to sea level; the height diagnostic shows
+  solid ground there, so it is not a hole through the planet.
+- **Completion evidence:** committed and pushed in `aa7da40`; OpenSpec change
+  `2026-11-08-open-flame-trench` archived.
 
 ### LF-04 — Facility scale and structural detail
 - **Status:** PLANNED

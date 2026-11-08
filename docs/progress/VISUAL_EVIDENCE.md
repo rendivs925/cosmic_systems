@@ -70,6 +70,8 @@ missing ones explainable.
 | `2026-11-07-vg01-papua-600m.jpg` | `c76c7be` | `-8.0,139.5,600` | 42 s | 220 | `22914e5c7ff597db` | ground view after the sea-datum tree exclusion | specks on land, none on water |
 | `2026-11-07-vg01-papua-3km.jpg` | `c76c7be` | `-8.0,139.5,3000` | 42 s | 220 | `a14c8d8f52cafc4a` | 3 km view of the same distribution | trees only on land |
 | `2026-11-07-lf02-starbase-pad-ground.jpg` | `1ea0895` | default chase | 0 s | 240 | `90e0855fe61cc288` | Starbase pad: tanks, blockhouse, floodlights and tower in profile | ground hardware on the pad plane |
+| `2026-11-08-lf03-starbase-trench-oblique.jpg` | `aa7da40` | `25.846333,-97.1553,20` (pitch 50, fov 50) | 16:30Z | 240 | `be29f0bc99bbbd86` | Starbase from the north: the flame trench reads as a lined recess with the deflector on its floor | open excavation, rim on the pad plane |
+| `2026-11-08-lf03-starbase-trench-nadir.jpg` | `aa7da40` | `25.845959,-97.1553,34` (fov 45) | 16:30Z | 240 | `13d360427176b016` | Nadir close-up of the same excavation | rectangular opening, lining grounded |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
@@ -386,6 +388,31 @@ is the measured 4.3 cm below-datum payload sample.
 limit of the measured data, not a resolved water body. Removing it would require
 cross-tile payload smoothing in the ingest pipeline, which would also smooth
 real channels.
+
+### Open flame trench (`LF-03`, commit `aa7da40`)
+
+Three defects hid the trench, and only the third explained the render.
+
+1. The terrain is graded level across the whole 110 m pad, so the trench box sat
+   *below grade*. Opening the deck alone would have exposed flat ground.
+2. The height field was lowered, but the streamed mesh samples it. The finest
+   Earth patch is 610.8 m across at 33 samples — 19.09 m between vertices — so a
+   14 m trench receives at most one vertex. Measured on the real patch: 0 at
+   level 13, 1 at level 14. The mesh interpolated back to grade.
+3. The lining rim topped out at exactly grade, coplanar with the ground and the
+   sea cap, so it z-fought.
+
+The fix cuts the *rendered mesh* where a structure says it covers the ground
+(`TerrainMeshCutout`), leaves the height field alone, and rebuilds the lining so
+every part straddles its opening edge and meets the pad plane.
+
+The 240-frame chase view is not usable evidence for this task: at ~200 m the
+opening is about 20×27 px against near-black concrete. The two frames above are
+deliberate close views from different headings.
+
+Known residual: a ~0.4 m sliver of the sea cap is visible at one trench corner,
+where the cut exposes ground close to sea level. The `height` diagnostic shows
+solid ground there, so it is not a hole through the planet.
 
 ### Grounded facility hardware (`LF-02`, commit `1ea0895`)
 

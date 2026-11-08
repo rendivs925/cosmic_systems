@@ -28,7 +28,7 @@ over with a new duplicate spec.
 | TD-11 coastal datum clearance | `terrain-source`, `planetary-water` | — | platform floor at sea + 3 m; the ascent fixture pins its launch altitude, so baselines are unaffected |
 | TD-12 near-datum base water | `terrain-source`, `terrain-erosion`, `terrain-rendering` | — | change `2026-11-07-classify-water-at-the-sea-datum`: water is measured NASADEM (4.3 cm below the datum), erosion is +4 m above it; the cap now classifies at the datum and keeps the 0.05 m offset for depth stability only |
 | LF-01 footprint | `launch-site-presentation` | — | |
-| LF-02…04 facility | `launch-site-presentation` | — | LF-02 archived `2026-11-07-ground-facility-hardware` (+ recorded requirement); LF-03/04 open |
+| LF-02…04 facility | `launch-site-presentation` | — | LF-02 archived `2026-11-07-ground-facility-hardware`; LF-03 archived `2026-11-08-open-flame-trench`; LF-04 open |
 | TM-01 material stability | `planetary-terrain-material`, `terrain-material-splat`, `terrain-lighting-occlusion` | — | change `2026-11-07-stabilize-material-classification-under-grading`: appearance-only natural height, graded geometry unchanged |
 | TM-02 distance detail | `terrain-lod`, `terrain-rendering` | — | change `2026-11-07-extend-terrain-relief-band`: mesh-only coarse band, band-pass LOD fade, land-only guard |
 | TM-03 land/sea reconciliation | `earth-imagery-streaming`, `terrain-source`, `terrain-rendering` | — | change `2026-11-07-reconcile-the-coastal-waterline`: Bight control transect, one-texel reconciliation |

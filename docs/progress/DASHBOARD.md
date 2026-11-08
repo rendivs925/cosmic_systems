@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 35 | 77.8 % |
+| VERIFIED | 36 | 80.0 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 8 | 17.8 % |
+| PLANNED | 7 | 15.6 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -115,18 +115,21 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | --- | --- |
 | specs | 40 |
 | active changes | 1 — `spaceflight-game-mvp` (5/37 tasks) |
-| archived changes | 43 |
-| strict validation | 42/42 pass |
+| archived changes | 44 |
+| strict validation | 41/41 pass |
 | requirement gaps | clouds have no OpenSpec spec (technical spec only); visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
 
-**Next task — LF-03, flame trench and deflector.** The deck currently covers the
-trench, so the deflector reads as a buried box. LF-03 opens the trench in the
-deck and makes the deflector visible and grounded, with nothing floating below
-the plane.
+**Next task — LF-04, launch facility scale.** LF-03 is closed: the trench was
+not merely covered by the deck, it was invisible because the streamed mesh cannot
+resolve a 14 m excavation at its finest LOD (610.8 m patches, 19.09 m between
+vertices — measured 0 vertices in the trench at level 13 and 1 at level 14). The
+terrain height field now carries the excavation and a new mesh cutout capability
+stops the rendered ground at the hardstand, so the pit is visible while collision
+and radar altitude keep the same surface.
 
 LF-02 is closed: the hold-down clamps floated 0.10 m and the deluge rails were
 buried 0.25 m; both are grounded, and a spawned-scene AABB test now guards every
-ground-based facility. LF-03 and LF-04, the vegetation geometry, clouds,
-resource invalidation and the visual suite follow.
+ground-based facility. LF-04, the vegetation geometry, clouds, resource
+invalidation and the visual suite follow.
