@@ -4,10 +4,10 @@
 use super::surface_maps::micro_noise;
 use super::{
     bark_uv, direction_to_lat_lon, face_uv_to_direction, vegetation_is_impostor_only,
-    BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS, BROADLEAF_UV, CANOPY_CARD_PLANES, CONIFER_UV,
-    GRASS_CARD_PLANES, GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY, GRASS_UV, OPAQUE_UV,
-    RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS, ROCK_RINGS,
-    ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
+    BRANCH_CANOPY_CARD_PLANES, BRANCH_SEGMENTS, BROADLEAF_UV, CANOPY_VOLUME_RINGS,
+    CANOPY_VOLUME_SEGMENTS, CONIFER_UV, GRASS_CARD_PLANES, GRASS_CLUMP_COUNT, GRASS_MIN_DENSITY,
+    GRASS_UV, OPAQUE_UV, RIVER_MIN_STRENGTH, RIVER_SURFACE_OFFSET_M, ROCK_COUNT, ROCK_MAX_LUMPS,
+    ROCK_RINGS, ROCK_SEGMENTS, SCATTER_FULL_DENSITY_LEVEL, TREE_MIN_DENSITY, TRUNK_SEGMENTS,
     VEGETATION_GROUND_COVER_MIN_PATCH_LEVEL,
 };
 use crate::domain::services::cube_sphere::{PatchGeometry, TerrainPatch};
@@ -462,8 +462,124 @@ impl MeshAccum {
                 let b = start + (r * segments + (s + 1) % segments) as u32;
                 let c = start + ((r + 1) * segments + s) as u32;
                 let d = start + ((r + 1) * segments + (s + 1) % segments) as u32;
+                self.indices.extend_from_slice(&[a, b, c, b, d, c]);
+            }
+        }
+    }
+
+    /// Push one closed, low-poly canopy volume: a jittered ellipsoid shell with
+    /// outward normals. Replaces the crossed billboards in the near band so a
+    /// crown has a silhouette and a lit side from every direction instead of the
+    /// flat card look. The far band keeps the cheap crossed impostor cards.
+    ///
+    /// The jitter is a deterministic hash of the lobe index and the ring/segment,
+    /// so the same patch always produces the same crown and the placement law is
+    /// untouched.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The canopy helper accepts the complete crown geometry and atlas inputs."
+    )]
+    fn push_canopy_volume(
+        &mut self,
+        centre: DVec3,
+        up: DVec3,
+        width_m: f64,
+        height_m: f64,
+        rotation_rad: f64,
+        uv: [f32; 4],
+        color: [f32; 3],
+        seed: u64,
+    ) {
+        if width_m <= 0.0 || height_m <= 0.0 {
+            return;
+        }
+        let reference = if up.y.abs() < 0.9 { DVec3::Y } else { DVec3::X };
+        let tangent = up.cross(reference).normalize();
+        let bitangent = up.cross(tangent).normalize();
+        let [u0, v0, u1, v1] = uv;
+        let rings = CANOPY_VOLUME_RINGS;
+        let segments = CANOPY_VOLUME_SEGMENTS;
+        let radius_xz = width_m * 0.5;
+        let half_height = height_m * 0.5;
+
+        let start = self.positions.len() as u32;
+        let push_vertex = |accum: &mut Self, point: DVec3, narrow: f64, height_t: f64, u: f64| {
+            let outward = (point - centre).normalize_or_zero();
+            accum
+                .positions
+                .push([point.x as f32, point.y as f32, point.z as f32]);
+            accum
+                .normals
+                .push([outward.x as f32, outward.y as f32, outward.z as f32]);
+            // Foliage darkens toward the underside of the crown.
+            let shade = (0.70 + 0.30 * ((height_t + 1.0) * 0.5)) as f32;
+            accum
+                .colors
+                .push([color[0] * shade, color[1] * shade, color[2] * shade, 1.0]);
+            let v_t = (1.0 - (height_t + 1.0) * 0.5) as f32;
+            let u_t = u as f32;
+            let v = v0 + (v1 - v0) * v_t;
+            let uu = u0 + (u1 - u0) * u_t;
+            accum.uvs.push([uu, v]);
+            accum.foliage_weights.push([1.0, 1.0]);
+            let _ = narrow;
+        };
+
+        // Ring vertices, from the underside to the crown.
+        for ring in 0..rings {
+            let phi = -std::f64::consts::FRAC_PI_2
+                + std::f64::consts::PI * (ring as f64 + 1.0) / (rings as f64 + 1.0);
+            let ring_radius = phi.cos();
+            let height_t = phi.sin();
+            for segment in 0..segments {
+                let azimuth =
+                    rotation_rad + std::f64::consts::TAU * segment as f64 / segments as f64;
+                // Deterministic asymmetric lobes: the crown is not a smooth ball.
+                let jitter =
+                    0.82 + 0.36 * hash01(segment as u64 * 7 + ring as u64, seed, 0x5ca9_0a11);
+                let radial = tangent * azimuth.cos() + bitangent * azimuth.sin();
+                let point = centre
+                    + radial * (radius_xz * ring_radius * jitter)
+                    + up * (half_height * height_t);
+                push_vertex(
+                    self,
+                    point,
+                    ring_radius,
+                    height_t,
+                    segment as f64 / segments as f64,
+                );
+            }
+        }
+        // Poles close the shell so it is a volume, not a cup.
+        let bottom = self.positions.len() as u32;
+        push_vertex(self, centre - up * half_height, 0.0, -1.0, 0.0);
+        let top = self.positions.len() as u32;
+        push_vertex(self, centre + up * half_height, 0.0, 1.0, 0.5);
+
+        let ring_index =
+            |ring: usize, segment: usize| start + (ring * segments + segment % segments) as u32;
+        // Wind every face outward. (tangent, bitangent, up) is right-handed and
+        // the azimuth runs tangent -> bitangent, so the outward normal is
+        // `up x azimuth`; the unflipped order faced inward and the crown read as
+        // a hollow ring with the ground visible through the middle.
+        for segment in 0..segments {
+            let a = ring_index(0, segment);
+            let b = ring_index(0, segment + 1);
+            self.indices.extend_from_slice(&[bottom, b, a]);
+        }
+        for ring in 0..rings - 1 {
+            for segment in 0..segments {
+                let a = ring_index(ring, segment);
+                let b = ring_index(ring, segment + 1);
+                let c = ring_index(ring + 1, segment);
+                let d = ring_index(ring + 1, segment + 1);
                 self.indices.extend_from_slice(&[a, c, b, b, c, d]);
             }
+        }
+        for segment in 0..segments {
+            let a = ring_index(rings - 1, segment);
+            let b = ring_index(rings - 1, segment + 1);
+            self.indices.extend_from_slice(&[top, a, b]);
         }
     }
 
@@ -1130,7 +1246,6 @@ pub(super) fn build_grounded_vegetation_mesh(
                 );
             }
         }
-        let canopy_center = base + up * (trunk_h + canopy_h * 0.5);
         // Continuous primary branches extruded from the trunk, tapered by the
         // da Vinci pipe model so the parent cross-section is conserved across
         // the child set. Each branch tip carries its own canopy lobe, giving the
@@ -1179,17 +1294,21 @@ pub(super) fn build_grounded_vegetation_mesh(
         for layer in 0..layers {
             let t = layer as f64 / layers as f64;
             let layer_scale = 1.0 - t * 0.32;
-            let layer_base = base + up * (trunk_h + canopy_h * 0.18 * layer as f64);
-            accum.push_cross_cards(
+            let layer_height = canopy_h * (0.82 - t * 0.22);
+            // `push_cross_cards` treats its base as the bottom of the billboard;
+            // the volume primitive is centred, so lift the centre by half its
+            // height to keep the same crown placement.
+            let layer_base =
+                base + up * (trunk_h + canopy_h * 0.18 * layer as f64 + layer_height * 0.5);
+            accum.push_canopy_volume(
                 layer_base,
                 up,
                 canopy_w * layer_scale,
-                canopy_h * (0.82 - t * 0.22),
-                CANOPY_CARD_PLANES,
+                layer_height,
                 rotation + layer as f64 * std::f64::consts::FRAC_PI_3,
                 canopy_uv,
                 foliage_color,
-                Some(canopy_center),
+                patch.tile_x as u64 * 131 + patch.tile_y as u64 * 17 + layer as u64,
             );
         }
     }

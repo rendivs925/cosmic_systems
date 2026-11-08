@@ -81,17 +81,21 @@ const BRANCH_SEGMENTS: usize = 4;
 const BRANCH_MAX_COUNT: usize = 6;
 /// Points (rings) along one extruded branch curve, including both endpoints.
 const BRANCH_RINGS: usize = 3;
-/// Crossed planes per branch-tip canopy lobe. Fewer than the trunk canopy so the
-/// per-branch foliage stays inside the bounded vegetation mesh reservation.
+/// Crossed planes per branch-tip canopy lobe. The tips stay cheap cards: they are
+/// small, they sit on a branch, and the flat look came from the stacked crown
+/// layers, which are now volumes.
 const BRANCH_CANOPY_CARD_PLANES: usize = 2;
+/// Latitude rings in a near-band canopy volume. Three rings plus two poles give a
+/// shell that reads round without a per-tree tessellation cost worth reserving.
+pub(crate) const CANOPY_VOLUME_RINGS: usize = 3;
+/// Longitudes around a near-band canopy volume.
+pub(crate) const CANOPY_VOLUME_SEGMENTS: usize = 6;
 /// Procedural rock base-shape tessellation. Rings and segments are bounded so
 /// the displaced rock reads as faceted geology without inflating the per-patch
 /// merged-mesh reservation beyond the previous boulder footprint by more than a
 /// small margin.
 const ROCK_SEGMENTS: usize = 8;
 const ROCK_RINGS: usize = 5;
-/// Crossed double-sided planes per canopy billboard.
-const CANOPY_CARD_PLANES: usize = 3;
 /// Maximum stacked canopy layers across all species (conifer uses three).
 /// Used only to reserve the merged-mesh byte budget.
 const CANOPY_CARD_LAYERS: usize = 3;
@@ -197,13 +201,17 @@ pub(crate) const LOCAL_SURFACE_MAP_BYTES: u64 =
 /// Conservative mesh bytes for `tree_count` merged canopy trees. Shared by the
 /// full-density and coarse-only budgets so the two can never drift apart.
 const fn tree_vegetation_mesh_bytes(tree_count: usize) -> u64 {
+    // Every non-impostor patch draws one volumetric shell per canopy layer plus
+    // a cheap crossed card per branch tip.
+    let volume_vertices = CANOPY_VOLUME_RINGS * CANOPY_VOLUME_SEGMENTS + 2;
+    let volume_indices = 6 * CANOPY_VOLUME_SEGMENTS;
     let tree_vertices = 2 * (TRUNK_SEGMENTS + 1)
         + BRANCH_MAX_COUNT * BRANCH_RINGS * (BRANCH_SEGMENTS + 1)
-        + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 4
+        + CANOPY_CARD_LAYERS * volume_vertices
         + BRANCH_MAX_COUNT * BRANCH_CANOPY_CARD_PLANES * 4;
     let tree_indices = TRUNK_SEGMENTS * 6
         + BRANCH_MAX_COUNT * (BRANCH_RINGS - 1) * BRANCH_SEGMENTS * 6
-        + CANOPY_CARD_LAYERS * CANOPY_CARD_PLANES * 6
+        + CANOPY_CARD_LAYERS * volume_indices
         + BRANCH_MAX_COUNT * BRANCH_CANOPY_CARD_PLANES * 6;
     tree_count as u64
         * (tree_vertices as u64 * VEGETATION_BYTES_PER_VERTEX
