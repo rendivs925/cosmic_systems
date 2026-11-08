@@ -851,22 +851,43 @@ timings. This phase exists because an unverifiable change is not a change.
   `2026-11-08-open-flame-trench` archived.
 
 ### LF-04 — Facility scale and structural detail
-- **Status:** PLANNED
+- **Status:** VERIFIED
 - **Priority:** P3
 - **Objective:** Bring tower, arms and supporting structures to a believable scale
   and level of detail for the chase camera.
 - **Dependencies:** LF-02.
 - **Subsystems:** launch presentation.
-- **Expected files:** `src/application/launch_tower.rs`,
-  `src/application/rocket_spawning.rs`.
+- **Evidence commit:** `cf3fd0a`.
 - **Acceptance:** tower height and platform spacing scale with the vehicle; no
   member floats without an attachment.
-- **Tests:** existing attachment tests extended for the vehicle families.
-- **Visual evidence:** ground frame per vehicle family.
-- **Performance:** structure draw distance respected.
+- **Defects found (audit) against Electron 1.2 m / Falcon 9 3.7 m / SLS 8.4 m /
+  Starship 9.0 m:**
+  1. The hold-down clamps sat at a fixed ±3 m, so their 2.4 m inner faces were
+     **inside** the 4.2 m SLS and 4.5 m Starship hulls.
+  2. The tower always had five platforms: 2.95 m bays for an 18 m Electron,
+     19.8 m bays for a 121 m Starship.
+  3. The service arms indexed platform 3 unconditionally and panicked as soon as
+     the level count could drop below four.
+- **Implementation:** the clamp ring is `hull radius + 0.35 m + half the clamp`,
+  placed on the pad axes so the nearest face is always clear; the platform count
+  is chosen from the vehicle height to land nearest a 12 m bay within 3–9 levels,
+  and the arm levels derive from it; water tanks, blockhouse and floodlights
+  scale with the vehicle (0.6–1.3×).
+- **Tests:** `tower_scale_follows_every_vehicle_family`,
+  `spawned_facility_scales_with_every_vehicle_family`, plus the existing
+  attachment and grounding tests.
+- **Visual evidence:** one ground frame per family
+  (`2026-11-08-lf04-{electron,falcon9,sls,starship}-pad.jpg`).
+- **Performance:** 40 extra triangles at most; the structure draw distance is
+  unchanged.
 - **Scientific validation:** not a surveyed model; documented as an approximation.
-- **Risks:** more geometry against the presentation budget.
-- **Completion evidence:** pending.
+- **Limits:** the hardstand and trench do not scale. A terrain-mesh cutout is only
+  applied to cells entirely inside its cap, so the guaranteed opening is the cap
+  minus half a cell diagonal (~36.5 m) against a 28 m trench; the pad therefore
+  cannot shrink below a medium-lift size. An 18 m Electron stands on a shared
+  pad, which reads oversized. Recorded, not hidden.
+- **Completion evidence:** committed and pushed in `cf3fd0a`; OpenSpec change
+  `2026-11-08-facility-scale` archived.
 
 ---
 

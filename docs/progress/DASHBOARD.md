@@ -11,11 +11,11 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 36 | 80.0 % |
+| VERIFIED | 37 | 82.2 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
 | BLOCKED | 2 | 4.4 % |
-| PLANNED | 7 | 15.6 % |
+| PLANNED | 6 | 13.3 % |
 | **total** | **45** | 100 % |
 
 ## Phase completion
@@ -121,7 +121,10 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — LF-04, launch facility scale.** LF-03 is closed: the trench was
+**Next task — VG-02, near-field canopy.** LF-04 is closed: the clamps sat
+inside the SLS and Starship hulls, the tower always had five platforms, and the
+service arms indexed a platform a short tower does not have. All three are fixed
+and tested per family. LF-03 is closed: the trench was
 not merely covered by the deck, it was invisible because the streamed mesh cannot
 resolve a 14 m excavation at its finest LOD (610.8 m patches, 19.09 m between
 vertices — measured 0 vertices in the trench at level 13 and 1 at level 14). The

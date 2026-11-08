@@ -72,6 +72,10 @@ missing ones explainable.
 | `2026-11-07-lf02-starbase-pad-ground.jpg` | `1ea0895` | default chase | 0 s | 240 | `90e0855fe61cc288` | Starbase pad: tanks, blockhouse, floodlights and tower in profile | ground hardware on the pad plane |
 | `2026-11-08-lf03-starbase-trench-oblique.jpg` | `aa7da40` | `25.846333,-97.1553,20` (pitch 50, fov 50) | 16:30Z | 240 | `be29f0bc99bbbd86` | Starbase from the north: the flame trench reads as a lined recess with the deflector on its floor | open excavation, rim on the pad plane |
 | `2026-11-08-lf03-starbase-trench-nadir.jpg` | `aa7da40` | `25.845959,-97.1553,34` (fov 45) | 16:30Z | 240 | `13d360427176b016` | Nadir close-up of the same excavation | rectangular opening, lining grounded |
+| `2026-11-08-lf04-electron-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `31c76abbc2b36d75` | Electron 18 m x 1.2 m: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
+| `2026-11-08-lf04-falcon9-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `ce69a0d8c257b037` | Falcon 9 70 x 3.7: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
+| `2026-11-08-lf04-sls-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `c9ddfa5ae9e87e38` | SLS 98 x 8.4: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
+| `2026-11-08-lf04-starship-pad.jpg` | `cf3fd0a` | default chase | 16:30Z | 240 | `e05ad4eda23d40b6` | Starship 121 x 9.0: facility scale for this family | tower and hardware proportional, clamps clear of the hull |
 | `2026-11-01-coast-40km-attempt.jpg` | `d89e7d6` | `-8.3,138.6,40000` | 42 s | 220 | `76a9513193f5ade4` | unsuccessful coastline attempt: featureless field | coastline visible (failing, unusable) |
 
 ### Diagnostic render modes (`P0-03`, commit `f3b1af6`)
