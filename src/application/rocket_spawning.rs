@@ -43,6 +43,22 @@ const RECORDER_MAX_ENTRIES: usize = 2_048;
 /// Flight-recorder sampling interval (s): ~10 physics ticks at 60 Hz.
 const RECORDER_INTERVAL_S: f64 = 1.0 / 6.0;
 
+/// Gap between the hull and the inner face of a hold-down clamp, metres. The
+/// clamp ring is derived from the hull radius, so no vehicle family can have its
+/// clamps sit inside the body.
+const CLAMP_CLEARANCE_M: f32 = 0.35;
+
+/// Size multiplier for the support structures, from the vehicle height.
+///
+/// The hardstand and the flame trench are site infrastructure and stay fixed: the
+/// trench width is what the terrain-mesh cutout contract can guarantee, so it
+/// cannot shrink with a small launcher. The hardware *on* the pad — tanks,
+/// blockhouse, floodlights — does follow the vehicle, or an 18 m Electron would
+/// stand beside 10 m tanks and a 12 m blockhouse.
+fn facility_scale(rocket_height_m: f32) -> f32 {
+    (rocket_height_m / 70.0).clamp(0.6, 1.3)
+}
+
 /// Authoritative launch-frame and mass properties computed once for a vehicle
 /// selection. Interactive presentation and headless execution both consume this
 /// single launch model so the two spawns cannot drift (AGENTS.md sections 17,
@@ -608,11 +624,20 @@ fn spawn_procedural_launch_pad(
                 Name::new("LaunchPadDelugeRail"),
             ));
         }
-        // Hold-down clamps around the vehicle base.
-        for (x, z) in [(-3.0_f32, -3.0_f32), (-3.0, 3.0), (3.0, -3.0), (3.0, 3.0)] {
+        // Hold-down clamps around the vehicle base. The radius comes from the
+        // hull, not from a fixed 3 m: at a fixed offset the clamps sat *inside*
+        // the 8.4 m SLS and 9.0 m Starship hulls.
+        let clamp_size_m = (rocket_diameter_m * 0.33).clamp(0.6, 1.6);
+        let clamp_radius_m = rocket_diameter_m * 0.5 + CLAMP_CLEARANCE_M + clamp_size_m * 0.5;
+        for (x, z) in [
+            (clamp_radius_m, 0.0_f32),
+            (-clamp_radius_m, 0.0),
+            (0.0, clamp_radius_m),
+            (0.0, -clamp_radius_m),
+        ] {
             parent.spawn((
                 LaunchSiteStructure,
-                Mesh3d(meshes.add(Cuboid::new(1.2, 0.8, 1.2))),
+                Mesh3d(meshes.add(Cuboid::new(clamp_size_m, 0.8, clamp_size_m))),
                 MeshMaterial3d(hazard.clone()),
                 // 0.8 m tall: centre at 0.4 m grounds the clamp on the pad.
                 Transform::from_xyz(x, 0.4, z),
@@ -683,23 +708,33 @@ fn spawn_procedural_launch_pad(
             ));
         }
         // Supporting facilities: water tanks, a control blockhouse, and
-        // perimeter floodlight poles.
-        for (x, z, radius) in [(-20.0_f32, 16.0_f32, 3.2_f32), (-13.0, 20.0, 2.4)] {
+        // perimeter floodlight poles. Their sizes follow the vehicle; their
+        // positions are the site layout and stay put.
+        let facility_scale = facility_scale(rocket_height_m);
+        for (x, z, radius_m) in [(-20.0_f32, 16.0_f32, 3.2_f32), (-13.0, 20.0, 2.4)] {
+            let radius_m = radius_m * facility_scale;
+            let height_m = 10.0 * facility_scale;
             parent.spawn((
                 LaunchSiteStructure,
-                Mesh3d(meshes.add(Cylinder::new(radius, 10.0))),
+                Mesh3d(meshes.add(Cylinder::new(radius_m, height_m))),
                 MeshMaterial3d(steel.clone()),
-                Transform::from_xyz(x, 5.0, z),
+                Transform::from_xyz(x, height_m * 0.5, z),
                 Name::new("LaunchPadWaterTank"),
             ));
         }
+        let blockhouse_height_m = 4.0 * facility_scale;
         parent.spawn((
             LaunchSiteStructure,
-            Mesh3d(meshes.add(Cuboid::new(12.0, 4.0, 8.0))),
+            Mesh3d(meshes.add(Cuboid::new(
+                12.0 * facility_scale,
+                blockhouse_height_m,
+                8.0 * facility_scale,
+            ))),
             MeshMaterial3d(concrete.clone()),
-            Transform::from_xyz(-22.0, 2.0, -16.0),
+            Transform::from_xyz(-22.0, blockhouse_height_m * 0.5, -16.0),
             Name::new("LaunchPadBlockhouse"),
         ));
+        let floodlight_height_m = 12.0 * facility_scale;
         for (x, z) in [
             (-16.0_f32, -16.0_f32),
             (-16.0, 16.0),
@@ -708,16 +743,22 @@ fn spawn_procedural_launch_pad(
         ] {
             parent.spawn((
                 LaunchSiteStructure,
-                Mesh3d(meshes.add(Cylinder::new(0.18, 12.0))),
+                Mesh3d(meshes.add(Cylinder::new(0.18, floodlight_height_m))),
                 MeshMaterial3d(steel.clone()),
-                Transform::from_xyz(x, 6.0, z),
+                Transform::from_xyz(x, floodlight_height_m * 0.5, z),
                 Name::new("LaunchPadFloodlightPole"),
             ));
             parent.spawn((
                 LaunchSiteStructure,
-                Mesh3d(meshes.add(Cuboid::new(1.4, 0.5, 0.6))),
+                Mesh3d(meshes.add(Cuboid::new(
+                    1.4 * facility_scale,
+                    0.5 * facility_scale,
+                    0.6 * facility_scale,
+                ))),
                 MeshMaterial3d(floodlight.clone()),
-                Transform::from_xyz(x, 12.2, z),
+                // Centre offset scales with the head, so it always overlaps
+                // the pole instead of floating above it.
+                Transform::from_xyz(x, floodlight_height_m + 0.2 * facility_scale, z),
                 Name::new("LaunchPadFloodlightHead"),
             ));
         }
@@ -1477,6 +1518,89 @@ mod tests {
             "the hardstand spans {apron_min:?}..{apron_max:?} but the terrain cutout \
              reaches {cutout_radius} m"
         );
+    }
+
+    /// LF-04: the facility must scale with every catalogue family. The clamps
+    /// used to sit at a fixed 3 m, which is inside the 8.4 m SLS and 9.0 m
+    /// Starship hulls, and the service arms indexed a fourth platform that a
+    /// short tower does not have.
+    #[test]
+    fn spawned_facility_scales_with_every_vehicle_family() {
+        // (height_m, diameter_m) for Electron, Falcon 9, SLS and Starship.
+        for (height_m, diameter_m) in [(18.0f32, 1.2f32), (70.0, 3.7), (98.0, 8.4), (121.0, 9.0)] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            app.init_resource::<Assets<Mesh>>();
+            app.init_resource::<Assets<StandardMaterial>>();
+            app.add_systems(
+                Startup,
+                move |mut commands: Commands,
+                      mut meshes: ResMut<Assets<Mesh>>,
+                      mut materials: ResMut<Assets<StandardMaterial>>| {
+                    spawn_procedural_launch_pad(
+                        &mut commands,
+                        &mut meshes,
+                        &mut materials,
+                        LaunchPadPresentation {
+                            planet_name: CelestialBodyId::earth(),
+                            position_body_fixed_m: DVec3::new(6_371_000.0, 0.0, 0.0),
+                            normal_body_fixed: DVec3::X,
+                            heading_body_fixed: DVec3::Z,
+                        },
+                        height_m,
+                        diameter_m,
+                    );
+                },
+            );
+            app.update();
+
+            let layout = TowerLayout::from_vehicle(height_m, diameter_m);
+            let hull_radius_m = diameter_m * 0.5;
+            let world = app.world_mut();
+            let mut query = world.query::<(&Name, &Transform, &Mesh3d)>();
+            let meshes = world.resource::<Assets<Mesh>>();
+            let mut clamps = 0;
+            let mut levels = 0;
+            for (name, transform, mesh3d) in query.iter(world) {
+                match name.as_str() {
+                    "LaunchPadHoldDownClamp" => {
+                        clamps += 1;
+                        let aabb = meshes
+                            .get(&mesh3d.0)
+                            .expect("clamp mesh must exist")
+                            .compute_aabb()
+                            .expect("clamp geometry must have bounds");
+                        let half = Vec3::from(aabb.half_extents)
+                            .x
+                            .max(Vec3::from(aabb.half_extents).z);
+                        let centre = transform.translation;
+                        let inner_m = centre.x.abs().hypot(centre.z.abs()) - half;
+                        assert!(
+                            inner_m > hull_radius_m,
+                            "{diameter_m} m vehicle: clamp inner face {inner_m:.2} m is inside \
+                             the {hull_radius_m:.2} m hull"
+                        );
+                    }
+                    "LaunchPadTowerLevel" => {
+                        levels += 1;
+                        assert!(
+                            transform.translation.y <= layout.height_m + 1e-3
+                                && transform.translation.y > 0.0,
+                            "platform at {} m is outside the {} m tower",
+                            transform.translation.y,
+                            layout.height_m
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(clamps, 4, "the pad needs four hold-down clamps");
+            assert_eq!(
+                levels, layout.level_count,
+                "{height_m} m vehicle spawned {levels} platforms, layout chose {}",
+                layout.level_count
+            );
+        }
     }
 
     #[test]

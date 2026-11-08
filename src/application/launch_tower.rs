@@ -12,8 +12,15 @@
 //! +Z is the lateral axis. The tower is offset clear of the vehicle by
 //! `center_x_m`, and every member endpoint lands on a column or platform edge.
 
-/// Number of stacked tower platforms. The topmost platform supports the mast.
-pub const TOWER_LEVEL_COUNT: usize = 5;
+/// Smallest number of stacked tower platforms. The topmost supports the mast.
+pub const MIN_TOWER_LEVELS: usize = 3;
+/// Largest number of stacked tower platforms. Beyond this the tower reads as a
+/// staircase rather than a service structure.
+pub const MAX_TOWER_LEVELS: usize = 9;
+/// Preferred platform-to-platform spacing, in meters. The level count is chosen
+/// to come closest to this for the vehicle's tower height, so a 15 m tower does
+/// not get 20 m bays and a 100 m tower does not get 3 m ones.
+pub const TARGET_BAY_HEIGHT_M: f32 = 12.0;
 /// Half the spacing between adjacent columns, in meters.
 pub const COLUMN_HALF_SPAN_M: f32 = 4.0;
 /// Half the platform edge length, in meters. Must exceed the column span so the
@@ -37,6 +44,8 @@ pub struct TowerLayout {
     pub column_half_span_m: f32,
     /// Half span of a platform slab, in meters.
     pub platform_half_span_m: f32,
+    /// Number of stacked platform levels, in `MIN_TOWER_LEVELS..=MAX_TOWER_LEVELS`.
+    pub level_count: usize,
 }
 
 /// A straight structural member between two attachment points, local to the pad
@@ -82,24 +91,34 @@ impl TowerLayout {
     pub fn from_vehicle(rocket_height_m: f32, rocket_diameter_m: f32) -> Self {
         let height_m = rocket_height_m * 0.82;
         let center_x_m = rocket_diameter_m * 0.5 + 10.0;
+        // Clamp the bay height by choosing the level count, not by stretching a
+        // fixed count across the tower: an 18 m vehicle and a 121 m vehicle
+        // cannot share five levels without one end reading as a ladder and the
+        // other as three isolated shelves.
+        let level_count = ((height_m / TARGET_BAY_HEIGHT_M).round() as usize)
+            .clamp(MIN_TOWER_LEVELS, MAX_TOWER_LEVELS);
         Self {
             height_m,
             center_x_m,
             mast_height_m: height_m + 18.0,
             column_half_span_m: COLUMN_HALF_SPAN_M,
             platform_half_span_m: PLATFORM_HALF_SPAN_M,
+            level_count,
         }
+    }
+
+    /// Vertical spacing between adjacent platforms, in meters.
+    pub fn bay_height_m(&self) -> f32 {
+        self.height_m / self.level_count as f32
     }
 
     /// Y position of each platform, from the lowest to the topmost. The topmost
     /// equals `height_m` so the mast is rooted on a platform rather than floating
     /// above the highest level.
-    pub fn platform_levels_y(&self) -> [f32; TOWER_LEVEL_COUNT] {
-        let mut levels = [0.0f32; TOWER_LEVEL_COUNT];
-        for (index, level) in levels.iter_mut().enumerate() {
-            *level = self.height_m * (index + 1) as f32 / TOWER_LEVEL_COUNT as f32;
-        }
-        levels
+    pub fn platform_levels_y(&self) -> Vec<f32> {
+        (1..=self.level_count)
+            .map(|index| self.height_m * index as f32 / self.level_count as f32)
+            .collect()
     }
 
     /// The four column centres on the pad-local +X/+Z plane.
@@ -128,7 +147,7 @@ impl TowerLayout {
 pub fn perimeter_braces(layout: &TowerLayout) -> Vec<TowerMember> {
     let mut members = Vec::new();
     let levels = layout.platform_levels_y();
-    for bay in 0..TOWER_LEVEL_COUNT - 1 {
+    for bay in 0..layout.level_count.saturating_sub(1) {
         let y = (levels[bay] + levels[bay + 1]) * 0.5;
         let corners = [
             layout.column_corner(-1.0, -1.0, y),
@@ -154,7 +173,7 @@ pub fn perimeter_braces(layout: &TowerLayout) -> Vec<TowerMember> {
 pub fn diagonal_braces(layout: &TowerLayout) -> Vec<TowerMember> {
     let mut members = Vec::new();
     let levels = layout.platform_levels_y();
-    for bay in 0..TOWER_LEVEL_COUNT - 1 {
+    for bay in 0..layout.level_count.saturating_sub(1) {
         let lower = levels[bay];
         let upper = levels[bay + 1];
         // Alternate diagonal direction per bay so the tower reads as a braced
@@ -185,7 +204,13 @@ pub fn service_arms(layout: &TowerLayout, rocket_diameter_m: f32) -> Vec<TowerMe
     let levels = layout.platform_levels_y();
     let rocket_surface_x = rocket_diameter_m * 0.5;
     let start_x = layout.center_x_m - layout.platform_half_span_m;
-    [3usize, 1usize]
+    // The arm levels follow the tower height: a short tower has no fourth
+    // platform, and indexing one anyway panicked.
+    let arm_levels = [
+        (layout.level_count * 3 / 4).min(layout.level_count - 1),
+        layout.level_count / 3,
+    ];
+    arm_levels
         .into_iter()
         .map(|level| {
             let y = levels[level];
@@ -221,9 +246,9 @@ mod tests {
     fn top_platform_supports_the_mast() {
         let layout = layout();
         let levels = layout.platform_levels_y();
-        assert_eq!(levels.len(), TOWER_LEVEL_COUNT);
+        assert_eq!(levels.len(), layout.level_count);
         assert!(
-            (levels[TOWER_LEVEL_COUNT - 1] - layout.height_m).abs() < 1e-4,
+            (levels[layout.level_count - 1] - layout.height_m).abs() < 1e-4,
             "the mast must be rooted on the top platform"
         );
         assert!(layout.mast_height_m > layout.height_m);
@@ -245,7 +270,7 @@ mod tests {
     fn perimeter_braces_connect_columns() {
         let layout = layout();
         let members = perimeter_braces(&layout);
-        assert_eq!(members.len(), (TOWER_LEVEL_COUNT - 1) * 4);
+        assert_eq!(members.len(), (layout.level_count - 1) * 4);
         for member in &members {
             assert!(
                 touches_column(&layout, member.start, 1e-3),
@@ -295,6 +320,40 @@ mod tests {
             );
             assert!(at_platform_level(&layout, member.start[1], 1e-3));
             assert!(member.length() > 0.0);
+        }
+    }
+
+    /// LF-04: the catalogue's four vehicle families span 18 m to 121 m, so the
+    /// level count must follow the height instead of stretching a fixed count.
+    #[test]
+    fn tower_scale_follows_every_vehicle_family() {
+        for (height_m, diameter_m) in [(18.0f32, 1.2), (70.0, 3.7), (98.0, 8.4), (121.0, 9.0)] {
+            let layout = TowerLayout::from_vehicle(height_m, diameter_m);
+            assert!(
+                (MIN_TOWER_LEVELS..=MAX_TOWER_LEVELS).contains(&layout.level_count),
+                "{height_m} m vehicle chose {} levels",
+                layout.level_count
+            );
+            assert!(
+                layout.height_m < height_m,
+                "the tower must stay below the nose"
+            );
+            // Bay height is what a person climbs; keep it in a readable band.
+            let bay = layout.bay_height_m();
+            assert!(
+                (4.0..=20.0).contains(&bay),
+                "{height_m} m vehicle gives a {bay:.1} m bay"
+            );
+            // The tower must stand clear of the hull at platform level.
+            assert!(
+                layout.center_x_m - layout.platform_half_span_m > diameter_m * 0.5,
+                "{height_m} m vehicle: the platform edge intersects the hull"
+            );
+            // Service arms must bridge a positive gap to the vehicle.
+            for member in service_arms(&layout, diameter_m) {
+                assert!(member.length() > 0.0);
+                assert!((member.end[0] - diameter_m * 0.5).abs() < 1e-3);
+            }
         }
     }
 
