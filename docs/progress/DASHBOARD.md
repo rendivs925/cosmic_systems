@@ -1,7 +1,7 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-07.
-Last code checkpoint: `1ea0895` (2026-11-07).
+Snapshot date: 2026-11-09.
+Last code checkpoint: `16cb836` (2026-11-09).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -22,16 +22,16 @@ evidenced", not "the simulator does not work".
 
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
-| P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 blocked by presentation |
+| P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 needs the release frame-time runs |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
-| P2 Launch facility | 2 / 4 | 50 % | active | LF-02 closed; trench and structural detail remain |
+| P2 Launch facility | 4 / 4 | 100 % | complete | LF-01…04 closed |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
 | P4 Vegetation | 3 / 3 | 100 % | complete | VG-01…03 closed |
 | P5 Clouds and wind | 6 / 6 | 100 % | complete | CL-01…06 closed |
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
 | P8 Rendering optimisation | 3 / 3 | 100 % | complete | RD-01…03 closed |
-| P9 Final validation | 2 / 3 | 67 % | active | VL-01 blocked by the swapchain; VL-02 and VL-03 closed |
+| P9 Final validation | 2 / 3 | 67 % | active | VL-01 needs three clean 25 s mode runs; VL-02 and VL-03 closed |
 
 ## Critical unresolved defects
 
@@ -42,8 +42,8 @@ Ordered by visible impact, not by ease.
 | 1 | Rectangular tone blocks at 300–1,200 km | TD-05 | **VERIFIED** | per-vertex roughness removed the land term; the seam that motivated it now measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km, inside ±1/255. The ocean half was measured with six new water views and **refuted** (no term carries a patch signal, p ≥ 0.12) |
 | 2 | Synthetic detail fabricated lakes on the coastal plain | TD-06 | **VERIFIED — fixed** | land-only sea-datum guard; worst-case detail cannot cross the datum, ocean floor keeps signed relief, all three baselines unchanged; Papua A/B mean 1.53/255, `2026-11-05-td06-papua-*` |
 | 3 | Land reads nearly black at 400 km while the deck is white | AT-03 | **VERIFIED — explained** | the altitude term is right: at `-4.0,138.0` the same ground measures the same albedo at 400 km and 3 km (0.0169 linear p50), occlusion is exactly 1.000, and the production/albedo ratio matches 300 km (1.77 vs 2.07). Tropical-forest albedo really is ~4 %; the deck is white because it is white. The *near-ground* render was 2.2× brighter because the local surface map carried absolute albedo 4× the overview's. **Fixed by TM-04**: it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % |
-| 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | PLANNED | `1200km-90f` |
-| 5 | Vegetation is sparse and reads as specks | VG-02/03 | PLANNED | VG-01 closed the datum defect and far-field density; the remaining sparseness is canopy geometry and shading; `2026-11-07-vg01-*` |
+| 4 | Cloud edges are salt-and-pepper cut-outs; one shape per regime | CL-05/06 | **VERIFIED — fixed** | cell-size spectrum (4.5–1.1 km from the existing octaves) and a smoothstep coverage edge with footprint-filtered mips; bright share 0.0350 vs 0.0332 at 1,200 km, inside ±0.02; `2026-11-08-cl05-deck-1200km.jpg`, `2026-11-08-cl06-deck-400km.jpg` |
+| 5 | Vegetation is sparse and reads as specks | VG-02/03 | **VERIFIED — improved** | closed lobed crown volumes plus graded wind sway; near-band crowns now read as volumes, and the far band keeps impostors for density; `2026-11-08-vg02-papua-300m-crown.jpg`, `2026-11-08-vg03-wind-*` |
 | 6 | Regional imagery inset still steps at its patch edge | TD-04 | **VERIFIED** | the edge is now a 16.6 km cross-fade at the region bound: the frame's worst step within ±40 px of the bound fell from 4.23 to 0.72/255 (its own texture level), and the before/after change is confined to x=381..737, the declared band. Resolution now uses patch overlap, so a straddling patch binds the tile |
 | 7 | Distant terrain has no geometric detail beyond LOD 11 | TM-02 | **VERIFIED — fixed** | mesh-only ~4 km / ±30 m band on LOD 5–11, land-only guard; collision, anchor and coastline unchanged; 40 km height diagnostic shows continuous contours; `2026-11-07-tm02-*` |
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | **VERIFIED — fixed** | bounded luminance-preserving diffuse fill; +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km, teal band 0.670 → 0.339, limb e-folding 8.24/8.45 → 8.30/8.33 km; `2026-11-05-at04-*` |
@@ -67,7 +67,7 @@ Ordered by visible impact, not by ease.
 | `cargo test --no-default-features --lib` | 1148 passed, 0 failed, 2 ignored | d72c5fc |
 | `openspec validate --all --strict` | 43 passed, 0 failed | d72c5fc |
 | `cargo build --release --features dem` | PASS | eba5d6e |
-| three-mode smoke (25 s each) | **blocked** — no presentable swapchain | — |
+| three-mode smoke (25 s each) | **not re-run** — a 20 s windowed probe presented on 2026-11-09; the three-mode acceptance run is pending | — |
 | visual capture path | works offscreen; windowed blocked | `d89e7d6` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -79,18 +79,19 @@ Ordered by visible impact, not by ease.
 
 | scene | state |
 | --- | --- |
-| prelaunch | partial (no HUD) |
+| prelaunch | current — body tripod and retained upper envelope |
 | launch site | current — one graded pad per predefined site, all flush and dry |
 | terrain close-up | current |
-| coastline | **missing** |
-| clouds | current |
+| coastline | current — Bight coastline within one overview texel |
+| clouds | current — cell-size spectrum and resolved edges |
 | atmosphere / limb | current — 10/30/70/200/400 km sequence and 200/400 km limb at 6° FOV |
-| vegetation | partial |
-| rocket ascent | **missing** |
+| vegetation | current — closed crowns and a fixed-pose wind pair |
+| rocket ascent | current — ascent, staging and plume at two altitudes |
 | high altitude | current |
-| orbit | **missing** |
+| orbit | current — orbital-altitude viewpoint at 400 km |
 
-One of ten required scenes (coastline) has no usable frame. See `VISUAL_EVIDENCE.md`.
+All ten required scenes are current; `scripts/visual_acceptance.py` reports
+`10 scenes pass`. See `VISUAL_EVIDENCE.md`.
 
 ## Performance baseline
 
@@ -122,25 +123,20 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — none unblocked.** All 43 non-blocked tasks are verified. P0-04 and VL-01 remain blocked by the absent presentable Vulkan swapchain; the offscreen path cannot substitute for a windowed session. VL-03 is verified:
-`visual_matrix.json` plus `scripts/visual_acceptance.py` machine-check the ten
-required scenes, and `10 scenes pass`. RD-01 is verified:
-every per-frame terrain system is classified, and the vegetation uniform no
-longer rewrites inputs that are already current. CL-06 is implemented:
-the coverage band is a smoothstep with a resolved lower-quarter edge, and the
-march now filters to the coarser of the ray step and the pixel footprint, so a
-distant deck stops aliasing into speckle. CL-05 is implemented: the deck's base
-volume already carries three Worley octaves, so re-weighting them with an
-already-fetched selector gives cells from about 4.5 km down to 1.1 km without a
-new fetch or a coordinate warp. VG-03 is implemented: the deck
-publishes the exact wind direction it advects with, vegetation reads that one
-vector, and sway is graded from each vertex's attachment instead of sliding whole
-cards. VG-02 is closed: near-band crowns are closed volumes and the
-far band keeps impostors. LF-04 is closed: the clamps sat inside the SLS and
-Starship hulls, the tower always had five platforms, and the service arms indexed
-a platform a short tower does not have. LF-03 is closed: the streamed mesh cannot
-resolve a 14 m excavation at its finest LOD, so a new mesh cutout stops the
-rendered ground at the hardstand while collision keeps the same surface.
+**Next task — two acceptance runs.** All 43 implementation tasks are verified;
+P0-04 and VL-01 are measurement/smoke tasks that need their own runs. A 20 s
+windowed probe on 2026-11-09 presented without a swapchain error, so the earlier
+environmental blocker may have cleared, but neither acceptance criterion has
+been met yet: P0-04 needs release frame-time rows at 720p and 1440p, and VL-01
+needs three clean 25 s mode runs. The five slices closed in the
+submission pass are recorded in `MASTER_ROADMAP.md`:
 
-Evidence and the full gate are deferred to one submission pass after the
-submission pass, as requested.
+* VG-03 shares one measured wind direction between deck and foliage and grades
+  sway from each vertex's attachment.
+* CL-05 re-weights the existing Worley octaves for a cell-size spectrum with no
+  extra fetch.
+* CL-06 makes the coverage edge a resolved quarter-band and filters the march to
+  the pixel footprint.
+* RD-01 classified every per-frame terrain system; the only remaining write was
+  the vegetation uniform rewriting unchanged inputs.
+* VL-03 machine-checks the ten required scenes; `10 scenes pass`.

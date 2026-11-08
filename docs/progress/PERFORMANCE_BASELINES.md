@@ -7,9 +7,9 @@ Measurements only. No optimisation is claimed from any row here.
 | field | value |
 | --- | --- |
 | Last measured commit | `feat/rocket-simulation` @ Phase 17 (2026-08-23) and `e501707`-era release audit (2026-09-11) |
-| Measured at the current code checkpoint (`d89e7d6`) | **NO** |
+| Measured at the current code checkpoint (`16cb836`) | **NO** |
 | Reason | The windowed run cannot present on this machine (see `README.md`), and the offscreen capture path is pinned to a 60 Hz `ScheduleRunnerPlugin` by construction, so its frame times are the runner's cadence, not render cost |
-| Next action | P0-04, blocked until a presentable display is available |
+| Next action | P0-04; a 20 s windowed probe on 2026-11-09 presented, so the release 720p/1440p runs are now attemptable |
 | Diagnostic modes | implemented 2026-11-01; production cost is one `u32` comparison per fragment, and *no* native frame time with a mode enabled has been measured |
 
 Do not read the tables below as describing the current build. They describe the

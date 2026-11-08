@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-08. Last code checkpoint: `d72c5fc`.
+Snapshot: 2026-11-09. Last code checkpoint: `16cb836`.
 
 ---
 
@@ -30,8 +30,8 @@ and a measurement path that captures frames without a swapchain.
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
 The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06
 edge structure, RD-01 invalidation audit and VL-03 visual acceptance — are
-implemented, evidenced and archived; only P0-04 and VL-01 remain blocked by the
-absent presentable swapchain.
+implemented, evidenced and archived; only P0-04 and VL-01 still need their own
+measurement and smoke runs.
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
 because the shared default epoch is local noon only at Papua. Resident regional
@@ -55,20 +55,20 @@ match off, and at the same 40 km pose the region/overview tone ratio falls from
 | Three launch pads sat under water: Starbase, KSC and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | **verified and closed.** Resident payloads replace the erosion refinement, the platform is floored 3 m above the sea datum, and all seven captured pads are dry |
 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | **verified and closed.** Erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean and Baikonur to 3.0–3.2/255, the same as two identical warm runs. A cold or cache-off run needs ~1,200 frames to finish streaming |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
-| Cloud edges are cut-outs; one shape per region | planned work |
+| Cloud edges are cut-outs; one shape per region | **verified and closed.** The deck carries a cell-size spectrum from 4.5 km to 1.1 km by re-weighting its existing octaves, and the coverage band is a resolved smoothstep with footprint-filtered mips. Bright share at 1,200 km is 0.0350 against 0.0332 before, inside ±0.02; `2026-11-08-cl05-deck-1200km.jpg`, `2026-11-08-cl06-deck-400km.jpg` |
 | Noon horizon reddened to tan/pink and the limb tail read teal | **verified and fixed by a bounded diffuse fill** (AT-04); the exact-horizon cloud-deck band remains a cloud task |
-| Vegetation reads as specks | planned work |
+| Vegetation reads as specks | **verified and improved.** Near-band crowns are closed lobed volumes rather than crossed cards, and foliage sway is graded from each vertex's attachment. The far band keeps impostors for density. `2026-11-08-vg02-papua-300m-crown.jpg`, `2026-11-08-vg03-wind-*` |
 | Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
-| No geometric terrain detail beyond LOD 11 | planned work |
-| **Windowed rendering fails on this machine** | environment: swapchain lost after one present |
+| No geometric terrain detail beyond LOD 11 | **verified and closed.** A mesh-only ~4 km / ±30 m band on LOD 5–11 adds distant relief; collision, anchor and coastline are unchanged (`2026-11-07-tm02-*`) |
+| **Windowed presentation** | a 20 s windowed probe on 2026-11-09 presented without a swapchain error or lost surface, so the earlier environment blocker may have cleared. This is a probe, not the acceptance smoke: `VL-01` still needs three clean 25 s mode runs, and `P0-04` still needs the release frame-time rows |
 
-The last row is why the three-mode smoke test cannot be re-run here. It is not a
-code defect and it is not hidden: the offscreen path exists precisely because of
-it.
+The windowed probe changes what is known about the environment but does not
+close `P0-04` or `VL-01`; both still require their own acceptance runs. The
+offscreen path remains the capture path either way.
 
 ## What has been verified?
 
-Thirty-five of forty-five roadmap tasks, each with implementation + tests + a
+Forty-three of forty-five roadmap tasks, each with implementation + tests + a
 named frame or a named measurement:
 
 | task | evidence |
@@ -106,29 +106,42 @@ named frame or a named measurement:
 | TM-02 distant relief | mesh-only ~4 km / ±30 m band, band-pass fade LOD 5–11, land-only sea guard; collision and coast unchanged; 40 km height diagnostic shows continuous contours; 241 tiles / 91.6 MiB, 1.40 ms main-thread streaming; `2026-11-07-tm02-*` |
 | TM-03 coastal reconciliation | Bight control transect: DEM coast ≈132.138°, albedo ≈132.136° (0.002° ≈ 0.2 km) inside the 4.3 km overview texel; luminance-midpoint method; 3 km frame `2026-11-07-tm03-bight-coast-3km.jpg` |
 | VG-01 vegetation distribution | gate/species/treeline use height above the local sea datum (the raw ellipsoidal test accepted a tree 5.2 m under the sea at Papua); generator version 1 + pinned seed/salt; real coastal-patch test, treeline test, identity test; `2026-11-07-vg01-*` |
+| VG-02 volumetric canopy | near-band crowns are closed lobed volumes with branch tips kept as cards; the far band keeps impostors; 3,000-instance draw path unchanged; `2026-11-08-vg02-papua-300m-crown.jpg` |
+| VG-03 foliage wind and shading | the deck publishes the exact wind direction it advects with and vegetation reads that vector; sway is graded from each vertex's attachment; fixed-pose half-period pair measures a 1 px crown shift at 0.058 m/px, consistent with the clamped 0.10 m amplitude; `2026-11-08-vg03-wind-*` |
+| CL-05 cloud cell-size spectrum | re-weights the base volume's 6/12/24-cell Worley octaves (about 4.5/2.25/1.1 km) from already-fetched weather and coarse channels; selector zero reproduces the old carve; bright share 0.0350 vs 0.0332 at 1,200 km, inside ±0.02; `2026-11-08-cl05-deck-1200km.jpg` |
+| CL-06 cloud edge structure | coverage band wrapped in a smoothstep whose lower quarter is the resolved edge; march uses the coarser of ray step and pixel footprint; 400 km edges are continuous ramps; `2026-11-08-cl06-deck-400km.jpg` |
+| RD-01 invalidation audit | every `Update` system in `TerrainRenderPlugin` classified; the vegetation uniform no longer rewrites unchanged inputs; two 600-frame stationary windows report 0 mesh / 0 material / 0 image creations, 0 published/activated patches and 0 duplicate requests |
 | LF-02 grounded hardware | hold-down clamps floated 0.10 m and deluge rails were buried 0.25 m; both grounded; spawned-scene AABB test over tanks, blockhouse, poles, legs, clamps and rails; `2026-11-07-lf02-starbase-pad-ground.jpg` |
-| VL-02 OpenSpec strict | 42/42 |
+| LF-03 flame trench | a `TerrainMeshCutout` stops the rendered ground at the hardstand while collision keeps the same surface; a guaranteed 36.5 m opening leaves the trench and deflector visible; `aa7da40` |
+| LF-04 facility scale | clamp ring, level count and support scaling follow the vehicle envelope; hardstand and trench stay fixed; `cf3fd0a` |
+| VL-02 OpenSpec strict | 43/43 |
+| VL-03 visual acceptance | manifest + harness; `10 scenes pass`, including an orbital-altitude 400 km viewpoint |
 
-Every implemented task is now verified. The two remaining blocked items are
-environmental; the rest are planned work.
+Every implemented task is now verified. The only remaining items are the two
+environmental blockers; there is no planned work left in this programme.
 
 ## What is blocked or needs a decision?
 
 | task | reason |
 | --- | --- |
-| P0-04 performance baseline | no presentable window |
-| VL-01 three-mode smoke | same presentation failure |
+| P0-04 performance baseline | release frame-time rows not yet measured |
+| VL-01 three-mode smoke | three clean 25 s runs not yet repeated |
 
 ## What should be built next?
 
-**LF-03 — flame trench and deflector.** The deck currently covers the trench, so
-the deflector reads as a buried box. LF-03 opens the trench in the deck and makes
-the deflector visible and grounded, with nothing floating below the plane.
+**Nothing in this realism programme is unblocked.** All 43 non-blocked tasks are
+verified. P0-04 and VL-01 need a presentable Vulkan swapchain, which this machine
+does not provide.
 
-LF-02 is closed: the hold-down clamps floated 0.10 m and the deluge rails were
-buried 0.25 m; both are grounded, and a spawned-scene AABB test now guards every
-ground-based facility. LF-03 and LF-04, the vegetation geometry, clouds, resource
-invalidation and the visual suite follow.
+If the programme is extended, the known residuals are the smallest visible
+defects rather than unstarted roadmap items: a ~0.4 m sea-cap sliver at one
+trench corner, hardstand/trench geometry that does not scale with very small
+vehicles, faceted crowns at extreme close range, and sparse vegetation at 600 m.
+
+A separate scientific-correctness track is still untouched and is not part of
+this roadmap: frame handedness, retro-propulsion during ascent, Falcon 9 data,
+aerodynamic axes, RCS allocation, closed-loop insertion, and a WGS-84 datum
+audit.
 
 ## How do we know it works?
 
@@ -136,8 +149,8 @@ invalidation and the visual suite follow.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1182 passed, 2 ignored
-cargo test --no-default-features --lib   # 1131 passed, 2 ignored
+cargo test --features dem --lib          # 1200 passed, 2 ignored
+cargo test --no-default-features --lib   # 1148 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -160,9 +173,10 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,182 domain and adapter
-tests pass (1,131 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified thirty-five of its forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,200 domain and adapter
+tests pass (1,148 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified forty-three of its forty-five tasks; the two
+remaining are acceptance runs rather than implementation.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -257,8 +271,9 @@ one-time 347–352 meshes at roughly 0.02 ms of mesh construction and 0.19 ms of
 CPU submission each. Those are CPU costs; GPU upload completion is still not
 exposed.
 
-Of the ten required visual scenes, five have usable evidence, two are partial,
-and three are missing. That is the truest single measure of where this stands.
+All ten required visual scenes now have current evidence and pass the harness;
+the `orbit` row is an orbital-altitude viewpoint rather than a vehicle in orbit,
+and says so.
 
 The rocket audit had the same shape one level down: the physics was right and the
 picture was wrong. A separated stage kept its own authoritative state but the

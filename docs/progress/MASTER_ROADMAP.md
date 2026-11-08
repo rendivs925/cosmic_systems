@@ -121,7 +121,9 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Status:** BLOCKED
 - **Priority:** P1
 - **Objective:** Re-measure p50/p95/p99/worst frame at the current commit.
-- **Dependencies:** a presentable window (environment).
+- **Dependencies:** a presentable window (environment). A 20 s windowed probe on
+  2026-11-09 presented without a swapchain error, so the blocker may have
+  cleared; the release measurement itself has not been run.
 - **Subsystems:** performance telemetry.
 - **Expected files:** `docs/progress/PERFORMANCE_BASELINES.md`,
   `docs/native_release_performance_audit.md`.
@@ -1771,7 +1773,8 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Priority:** P0
 - **Objective:** `cargo run`, `cargo run -- craft`, `cargo run -- rocket` each run
   for 25 s with zero shader/panic/wgpu errors.
-- **Dependencies:** a presentable window (environment).
+- **Dependencies:** a presentable window (environment). The 20 s windowed probe
+  above presented, but the three-mode acceptance run has not been repeated.
 - **Subsystems:** all.
 - **Expected files:** none.
 - **Acceptance:** three exit codes 124 (timeout), zero error matches in each log.
