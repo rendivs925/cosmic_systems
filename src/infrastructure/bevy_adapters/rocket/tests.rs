@@ -1611,7 +1611,7 @@ mod ascent_pipeline_tests {
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::reference_frames::{
-        planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+        planet_equatorial_reference_x_axis, planet_inertial_rotation_axis,
     };
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::simulation_time::SimulationTime;
@@ -2043,7 +2043,9 @@ mod ascent_pipeline_tests {
         let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
         let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
         let orientation = test_earth_orientation();
-        let reference_normal = planet_inertial_spin_axis(&orientation);
+        // Inclination is measured about the rotation axis, which is antiparallel
+        // to the geometric pole in the reflected solar frame.
+        let reference_normal = planet_inertial_rotation_axis(&orientation);
         let reference_x_axis = planet_equatorial_reference_x_axis(&orientation);
         let position_m = reference_x_axis * radius_m;
         let orbit_normal = reference_normal * target.target_inclination_rad.cos()
@@ -3128,7 +3130,7 @@ mod determinism_regression_tests {
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::reference_frames::{
-        planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+        planet_equatorial_reference_x_axis, planet_inertial_rotation_axis,
     };
     use crate::domain::services::regression::{
         load_baseline_ron, save_baseline_ron, RegressionConfig, RocketStateSample,
@@ -3242,7 +3244,7 @@ mod determinism_regression_tests {
         let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
         let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
         let orientation = super::test_earth_orientation();
-        let reference_normal = planet_inertial_spin_axis(&orientation);
+        let reference_normal = planet_inertial_rotation_axis(&orientation);
         let reference_x_axis = planet_equatorial_reference_x_axis(&orientation);
         let position_m = reference_x_axis * radius_m;
         let orbit_normal = reference_normal * target.target_inclination_rad.cos()

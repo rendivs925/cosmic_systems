@@ -138,12 +138,13 @@ trench corner, hardstand/trench geometry that does not scale with very small
 vehicles, faceted crowns at extreme close range, and sparse vegetation at 600 m.
 
 A separate scientific-correctness track has been opened and is recorded in
-`docs/scientific_correctness_audit.md`. It found and fixed two defects — the
-retro-propulsion correlation being applied to powered ascents, and orbit
-insertion targeting the WGS-84 geodetic latitude instead of the geocentric one —
-and records five audited gaps: frame handedness (no defect), aerodynamic axis
-naming, per-thruster RCS allocation, closed-loop insertion, and Falcon 9
-provenance. None of those closes a roadmap task.
+`docs/scientific_correctness_audit.md`. It found and fixed three defects — the
+retro-propulsion correlation being applied to powered ascents, orbit insertion
+targeting the WGS-84 geodetic latitude instead of the geocentric one, and
+orbital inclination being measured about the geometric pole instead of the
+rotation axis — and records five further audited items: handedness (which led to
+the third defect), aerodynamic axis naming, per-thruster RCS allocation, the
+insertion law, and Falcon 9 provenance. None of those closes a roadmap task.
 
 ## How do we know it works?
 
@@ -151,8 +152,8 @@ provenance. None of those closes a roadmap task.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1207 passed, 2 ignored
-cargo test --no-default-features --lib   # 1155 passed, 2 ignored
+cargo test --features dem --lib          # 1209 passed, 2 ignored
+cargo test --no-default-features --lib   # 1157 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -175,8 +176,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,207 domain and adapter
-tests pass (1,155 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,209 domain and adapter
+tests pass (1,157 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not

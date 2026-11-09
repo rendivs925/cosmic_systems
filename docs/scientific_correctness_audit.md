@@ -20,6 +20,7 @@ code plus at least one test, not runtime-verified flight.
 | SC-05 | Closed-loop orbit insertion | **PARTIAL — acceptance predicate and bang-bang burn only** |
 | SC-06 | Falcon 9 data provenance | **DECLARED REPRESENTATIVE — no pinned source byte** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
+| SC-08 | Orbital inclination measured from the geometric pole instead of the rotation axis | **DEFECT — fixed; one baseline regenerated** |
 
 ---
 
@@ -59,6 +60,14 @@ minimal harness that never inserts `EntryPhysicsConfig` or
 those recordings. Those regression tests still pass without regenerating a
 baseline.
 
+**Runtime A/B (headless).** `headless_scenario --vehicle falcon9 --site
+starbase --steps 7680` flies the real fixed pipeline for 120 s. The fixed build
+reaches 4.817 km/s at 187.4 km; a temporary build with the pre-fix gate reaches
+2.807 km/s at 190.7 km. Thrust at Mach 3 is 8,097 kN fixed versus 6,658 kN
+pre-fix — exactly the 0.82 correlation factor — and the lost acceleration also
+delays Mach growth and staging, so the gap compounds. Restoring the gate
+reproduced the fixed artifact bit for bit.
+
 **Residuals.**
 - No runtime flight measurement is possible in this session (rocket mode leaves
   the pad only on a Space press and there is no input injection), so this is
@@ -97,6 +106,9 @@ pseudovector (a magnetic-field vector, a published angular-momentum direction, a
 mirrored texture) must cross the same reflection or it will have the wrong sign.
 No test asserts `det(body_fixed → planet_inertial) = +1`, and the only external
 azimuth check is the pinned SPICE launch-site case.
+
+**The risk materialized.** Orbital inclination was measured about the geometric
+pole, which is antiparallel to the rotation axis in this frame. See SC-08.
 
 ## SC-03 — Aerodynamic axes and center of pressure
 
@@ -197,6 +209,61 @@ contract is now stated as geocentric input.
 launch stand uses the terrain surface normal), and changing it would move every
 local-tangent consumer, so it is recorded rather than changed.
 
+**Runtime evidence.** The same headless ascent that measured SC-01 was analyzed
+independently: the ascent plane converges to 25.81° inclination relative to the
+rotation axis by t=120 s (geocentric Starbase 25.8458°, geodetic 25.9971°), with
+a launch azimuth of 89.8° east of north. The target the autopilot now stores is
+therefore the plane the vehicle actually flies.
+
+## SC-08 — Orbital inclination reference axis
+
+**Defect.** Inclination was computed as `acos(h · k / |h|)` with `k` =
+`planet_inertial_spin_axis`, the **geometric north pole**. In the reflected solar
+frame the body's rotation axis is `−k` (that is why
+`surface_velocity_in_planet_inertial` negates the ICRF angular velocity, and why
+the local eastward direction is `up × k`). A physically correct eastward ascent
+therefore has `h` antiparallel to `k` and the sim reported **180° − i**.
+
+Measured on a real headless ascent (Falcon 9, Starbase, 900 s): azimuth 89.8°
+east of north, inclination 154.19° about the geometric pole, 25.81° about the
+rotation axis. Consequences:
+
+1. `LowEarthOrbitTarget::matches_state_in_reference_frame` compared 154.19° with
+   a 25.85° ± 2° target, so the plane condition could never be satisfied and the
+   mission could not reach `Orbit` through insertion.
+2. Orbital telemetry reported the supplement of the true inclination.
+3. The safe-LEO regression fixture was itself built about the geometric pole, so
+   its recorded "validated inclined circular orbit" was physically retrograde
+   relative to the planet's rotation. It could never have caught this.
+
+**Fix.** `planet_inertial_rotation_axis(orientation)` returns
+`−normalize(icrf_j2000_to_solar_inertial(ω))` — the physical rotation axis — and
+falls back to the geometric pole when a body has no usable angular velocity. It
+is now the reference for `orbital_elements_from_state_in_reference_frame`
+(telemetry, guidance and insertion checks). The geometric pole stays the
+reference for `planet_inertial_enu_basis` and the launch-heading formula, which
+empirically produce the correct prograde plane.
+
+**Tests.**
+- `rotation_axis_matches_the_surface_velocity_sense`: the axis is exactly
+  antiparallel to the pole and reproduces `surface_velocity = |ω|·(axis × r)`.
+- `inclination_is_measured_about_the_rotation_axis`: a circular equatorial
+  prograde state reads 0° about the axis and 180° about the pole.
+- The two ascent baselines are unchanged; the system-level insertion test still
+  reaches `Orbit` and cuts thrust.
+
+**Baseline change.** `tests/baselines/leo-insertion-safe.ron` was regenerated
+with the documented `REGRESSION_RECORD=1` workflow. The initial position is
+unchanged; the velocity flips to the prograde direction (the old recording flew
+the mirror orbit) and the recording still ends in `Orbit` with thrust cut. Only
+that fixture changed; `ascent` and `ascent-gravity-turn` match their committed
+files.
+
+**Remaining blocker.** Insertion still does not complete for the Falcon 9 ascent
+in 900 s, because the apsis/eccentricity condition never matches — the ascent
+over-burns to a 1,468 km, e=0.31 arc. That is SC-05 (no throttle cutoff law),
+not a frame issue.
+
 ---
 
 ## Next steps, in order of physical impact
@@ -204,18 +271,21 @@ local-tangent consumer, so it is recorded rather than changed.
 1. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
    placement, failure, or propellant cost. This is the largest remaining gap in
    the attitude loop.
-2. **SC-05 — insertion law.** Replace bang-bang apoapsis chasing with a
-   cutoff targeted at the apoapsis and a post-insertion eccentricity/plane trim;
-   the acceptance predicate can then shrink below ±25 km and ±2°.
+2. **SC-05 — insertion law.** It is now the only reason a Falcon 9 ascent does
+   not reach `Orbit`: the vehicle over-burns to a 1,468 km, e=0.31 arc. Replace
+   bang-bang apoapsis chasing with a cutoff targeted at the apoapsis and a
+   post-insertion eccentricity/plane trim; the acceptance predicate can then
+   shrink below ±25 km and ±2°.
 3. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
 4. **SC-03 — define the body lateral axes** in one place, then name the
    aerodynamic coefficients from that definition and correct the static-margin
    comment.
-5. **Runtime verification of SC-01 and SC-07** once the session can inject a
-   launch key: an ascent recording should show full thrust above Mach 1.2 and a
-   target inclination equal to the geocentric site latitude.
+5. **Inclination convention checklist.** Every new consumer of a planet pole
+   must state whether it needs the geometric pole (local east/north, J2
+   symmetry) or the rotation axis (orbital elements, angular momentum). SC-08
+   was exactly that confusion.
 
 ## Validation
 
@@ -228,6 +298,7 @@ the previous floor was 1,202 with `dem` and 1,150 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,207 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,155 passed, 2 ignored |
+| `cargo test --features dem --lib` | 1,209 passed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,157 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
+| headless Falcon 9 ascent, 900 s | deterministic; plane 25.81° about the rotation axis; insertion blocked by SC-05 |

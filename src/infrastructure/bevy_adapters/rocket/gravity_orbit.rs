@@ -14,8 +14,8 @@ use crate::domain::services::gravity_harmonics::{
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
-    icrf_j2000_to_solar_inertial, planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
-    solar_inertial_to_icrf_j2000,
+    icrf_j2000_to_solar_inertial, planet_equatorial_reference_x_axis,
+    planet_inertial_rotation_axis, planet_inertial_spin_axis, solar_inertial_to_icrf_j2000,
 };
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -194,7 +194,7 @@ pub fn update_orbital_elements(
             rocket.dynamics.position_m,
             rocket.dynamics.velocity_mps,
             mu_m3_s2,
-            planet_inertial_spin_axis(orientation),
+            planet_inertial_rotation_axis(orientation),
             planet_equatorial_reference_x_axis(orientation),
         );
         elements.semi_major_axis_m = state.semi_major_axis_m;

@@ -9,7 +9,7 @@ use crate::domain::services::guidance::{
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
-    planet_equatorial_reference_x_axis, planet_inertial_spin_axis,
+    planet_equatorial_reference_x_axis, planet_inertial_rotation_axis, planet_inertial_spin_axis,
 };
 use crate::domain::services::rocket_propulsion::{
     stage_available_thrust_body, STANDARD_GRAVITY_MPS2,
@@ -161,13 +161,19 @@ pub fn guidance_system(
         let surface_relative_velocity_mps = conditions.atmosphere_relative_velocity_mps;
         let surface_relative_speed_mps = conditions.airspeed_mps;
         let mu = mu_m3_s2;
+        // Two distinct references: the geometric pole defines the local
+        // east/north basis used by the launch heading, while inclination is
+        // measured about the physical rotation axis. For a prograde body in the
+        // reflected solar frame those are antiparallel; using the pole for
+        // elements reports 180°-i and the insertion target can never match.
         let reference_normal = planet_inertial_spin_axis(orientation);
+        let rotation_axis = planet_inertial_rotation_axis(orientation);
         let reference_x_axis = planet_equatorial_reference_x_axis(orientation);
         let state_elements = orbital_elements_from_state_in_reference_frame(
             position_m,
             inertial_velocity_mps,
             mu,
-            reference_normal,
+            rotation_axis,
             reference_x_axis,
         );
         let target_orbit_reached = autopilot.target_orbit.matches_state_in_reference_frame(
@@ -175,7 +181,7 @@ pub fn guidance_system(
             inertial_velocity_mps,
             mu,
             radius_m,
-            reference_normal,
+            rotation_axis,
             reference_x_axis,
         );
 

@@ -19,6 +19,18 @@ REGRESSION_TEST_FILTER=determinism_regression_tests::<test-name> \
 
 Review the fixture audit metadata, state samples, and hash chain before commit.
 
+## 2026-11-09 inclination-reference update
+
+`leo-insertion-safe` was re-recorded after orbital inclination was corrected to
+be measured about the physical rotation axis instead of the geometric pole. The
+reflected solar frame makes those antiparallel for Earth, so the previous
+recording described a circular orbit that was *retrograde* relative to the
+planet's rotation while its inclination metadata said 28.5° prograde. The
+initial position is unchanged; the velocity direction flips to the true
+prograde sense, and the fixture still ends on the tick that changes mission state
+to `Orbit` and cuts thrust. `ascent` and `ascent-gravity-turn` are unchanged.
+No guidance, propulsion, force, or integration equation changed.
+
 ## 2026-10-21 terrain-alignment update
 
 The three flight baselines were re-recorded after regional DEMs were aligned to

@@ -1,6 +1,6 @@
 (
     name: "leo-insertion-safe",
-    git_commit: "8931b71",
+    git_commit: "081a644",
     run_identity: (
         scenario_id: "leo-insertion-safe",
         vehicle_model_id: "electron-like-test-fixture",
@@ -14,7 +14,7 @@
         numerical_integrator: "semi-implicit Euler",
         fixed_timestep_s: 0.015625,
         random_seed: None,
-        software_revision: "8931b71",
+        software_revision: "081a644",
     ),
     audit: (
         change_description: "add a deterministic safe low-Earth-orbit insertion regression recording for the existing ascent completion predicate",
@@ -40,7 +40,7 @@
     samples: [
         (
             position_m: (6571000.0, 0.0, 0.0),
-            velocity_mps: (0.0, 6132.241620863787, -4801.504594021632),
+            velocity_mps: (0.0, -6132.241620863787, 4801.504594021631),
             orientation: (-0.5051576086036371, 0.0, -0.08319353797597404, 0.859007931109425),
             angular_velocity_radps: (0.0, 0.0, 0.0),
             mass_kg: 12500.0,
@@ -48,15 +48,15 @@
         ),
         (
             position_m: (6571000.0, 0.0, 0.0),
-            velocity_mps: (0.0, 6132.241620863787, -4801.504594021632),
+            velocity_mps: (0.0, -6132.241620863787, 4801.504594021631),
             orientation: (-0.5051576086036371, 0.0, -0.08319353797597404, 0.859007931109425),
             angular_velocity_radps: (0.0, 0.0, 0.0),
             mass_kg: 12500.0,
             guidance_code: 2,
         ),
         (
-            position_m: (6570999.999657685, 95.81513580144677, -75.02143071889856),
-            velocity_mps: (2716.8906383501035, 4069.4061476969932, -2834.793292681008),
+            position_m: (6570999.999657685, -95.81741485054657, 75.02558784427744),
+            velocity_mps: (-1281.9858776605474, -4851.45054854659, 3845.8250539536957),
             orientation: (-0.5042288436250708, -0.0000000000000000005421010862427522, -0.08498968884056539, 0.8593776969687471),
             angular_velocity_radps: (0.0, 0.0, 0.0),
             mass_kg: 12500.0,
@@ -64,8 +64,8 @@
         ),
     ],
     hash_chain: [
-        6068713942594238783,
-        6068713942594238783,
-        10171885125952511831,
+        11591041705895543716,
+        11591041705895543716,
+        3663892711267098447,
     ],
 )

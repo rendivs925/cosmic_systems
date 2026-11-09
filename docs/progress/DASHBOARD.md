@@ -63,8 +63,8 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 4fb161b |
 | `cargo check --no-default-features` | PASS | 4fb161b |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 4fb161b |
-| `cargo test --features dem --lib` | 1207 passed, 0 failed, 2 ignored | 4fb161b |
-| `cargo test --no-default-features --lib` | 1155 passed, 0 failed, 2 ignored | 4fb161b |
+| `cargo test --features dem --lib` | 1209 passed, 0 failed, 2 ignored | 4fb161b |
+| `cargo test --no-default-features --lib` | 1157 passed, 0 failed, 2 ignored | 4fb161b |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 4fb161b |
 | `cargo build --release --features dem` | PASS | 4fb161b |
 | three-mode smoke (25 s each) | PASS — all three exit 124, zero hard errors; `39bed95` | `39bed95` |
@@ -133,8 +133,10 @@ AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
 GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
 
 Extension work is a separate scientific-correctness track, not remaining roadmap
-items. It is open and recorded in `docs/scientific_correctness_audit.md`: two
+items. It is open and recorded in `docs/scientific_correctness_audit.md`: three
 defects fixed (retro-propulsion applied to powered ascents; insertion targeting
-the geodetic instead of geocentric site latitude) and five audited gaps (frame
-handedness — no defect found, aerodynamic axis naming, per-thruster RCS
-allocation, closed-loop insertion, Falcon 9 provenance).
+the geodetic instead of geocentric site latitude; inclination measured about the
+geometric pole instead of the rotation axis, which required re-recording
+`leo-insertion-safe`) and five audited items (frame handedness, aerodynamic axis
+naming, per-thruster RCS allocation, closed-loop insertion, Falcon 9
+provenance).

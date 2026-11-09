@@ -329,11 +329,35 @@ pub fn surface_velocity_in_planet_inertial(pos_pci: DVec3, orientation: &BodyOri
     angular_velocity_solar.cross(pos_pci)
 }
 
-/// Unit normal of the planet's equatorial plane in project planet-centered
-/// inertial coordinates. Orbital inclination for local flight is measured from
-/// this axis, not from the solar rendering frame's +Z axis.
+/// Geometric north pole in project planet-centered inertial coordinates: the
+/// normal of the planet's equatorial plane, and the reference for the local
+/// east/north basis. It is **not** the inclination reference; use
+/// [`planet_inertial_rotation_axis`] for orbital elements.
 pub fn planet_inertial_spin_axis(orientation: &BodyOrientation) -> DVec3 {
     body_fixed_to_planet_inertial_rotation(orientation) * DVec3::Y
+}
+
+/// Direction of the body's angular velocity in project planet-centered inertial
+/// axes: the physical rotation axis used to measure orbital inclination.
+///
+/// The reflected solar mapping turns the IAU pole into the **negative** of the
+/// rotation axis for a body with prograde IAU rotation. That is why
+/// [`surface_velocity_in_planet_inertial`] negates the transformed ICRF angular
+/// velocity, and why a local eastward launch here has an orbit normal along
+/// `−planet_inertial_spin_axis`. Inclination is defined about the rotation axis
+/// by the right-hand rule, so orbital elements and insertion checks must use
+/// this vector, while the geometric pole remains the reference for the local
+/// east/north basis. Falls back to the geometric pole when the catalog has no
+/// usable angular velocity.
+pub fn planet_inertial_rotation_axis(orientation: &BodyOrientation) -> DVec3 {
+    let omega = orientation.angular_velocity_inertial_rad_s;
+    if omega.is_finite() && omega.length_squared() > 0.0 {
+        let axis = -icrf_j2000_to_solar_inertial(omega);
+        if axis.length_squared() > 0.0 {
+            return axis.normalize();
+        }
+    }
+    planet_inertial_spin_axis(orientation)
 }
 
 /// Inertial reference direction for right ascension within a planet's
@@ -790,6 +814,69 @@ mod tests {
             * (ksc().latitude_deg as f64).to_radians().cos();
         assert!((velocity.length() - expected).abs() < 1.0);
         assert!(velocity.dot(pos_pci).abs() < 1e-5 * pos_pci.length());
+    }
+
+    #[test]
+    fn rotation_axis_matches_the_surface_velocity_sense() {
+        let planet = earth();
+        let orientation = test_orientation();
+        let axis = planet_inertial_rotation_axis(&orientation);
+        let pole = planet_inertial_spin_axis(&orientation);
+
+        // The reflected solar frame puts a prograde IAU rotation about -pole.
+        assert!((axis + pole).length() < 1e-12);
+        // Every surface point moves about that axis: v = |omega| * (axis x r).
+        let pos_pci =
+            body_fixed_to_planet_inertial(geodetic_to_body_fixed(&ksc(), &planet), &orientation);
+        let velocity = surface_velocity_in_planet_inertial(pos_pci, &orientation);
+        let expected = axis.cross(pos_pci) * orientation.angular_velocity_inertial_rad_s.length();
+        assert!(
+            (velocity - expected).length() < 1e-9,
+            "surface velocity must follow the rotation axis"
+        );
+    }
+
+    #[test]
+    fn inclination_is_measured_about_the_rotation_axis() {
+        let planet = earth();
+        let orientation = test_orientation();
+        let pole = planet_inertial_spin_axis(&orientation);
+        let axis = planet_inertial_rotation_axis(&orientation);
+        let reference_x = planet_equatorial_reference_x_axis(&orientation);
+        let radius_m = planet_radius_m(&planet) + 200_000.0;
+        let position = reference_x * radius_m;
+
+        // A circular, equatorial, prograde orbit: v = axis x r.
+        let speed = (planet.mass_kg * crate::domain::services::gravity::GRAVITATIONAL_CONSTANT
+            / radius_m)
+            .sqrt();
+        let velocity = axis.cross(position).normalize() * speed;
+        let mu = planet.mass_kg * crate::domain::services::gravity::GRAVITATIONAL_CONSTANT;
+
+        use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
+        let prograde = orbital_elements_from_state_in_reference_frame(
+            position,
+            velocity,
+            mu,
+            axis,
+            reference_x,
+        );
+        let about_pole = orbital_elements_from_state_in_reference_frame(
+            position,
+            velocity,
+            mu,
+            pole,
+            reference_x,
+        );
+        assert!(
+            prograde.inclination_rad.to_degrees().abs() < 1e-9,
+            "prograde equatorial orbit must read 0 deg, got {}",
+            prograde.inclination_rad.to_degrees()
+        );
+        assert!(
+            (about_pole.inclination_rad.to_degrees() - 180.0).abs() < 1e-9,
+            "the geometric pole is the wrong inclination reference"
+        );
     }
 
     #[test]
