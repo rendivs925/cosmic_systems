@@ -17,7 +17,7 @@ least one test, not runtime-verified flight.
 | --- | --- | --- |
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
-| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **PARTIAL — model self-consistent; two documentation defects** |
+| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; CP comment corrected** |
 | SC-04 | Per-thruster RCS allocation | **GAP — no thruster model; scalar per-axis clamp** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
@@ -114,28 +114,59 @@ pole, which is antiparallel to the rotation axis in this frame. See SC-08.
 
 ## SC-03 — Aerodynamic axes and center of pressure
 
-**Model as found.** Body `+Y` is longitudinal. Angle of attack is
-`atan2(−v_x, v_y)`, sideslip is `asin(v_z / |v|)`, drag opposes the velocity,
-and the normal force is the component of body `+X` perpendicular to the flow
-scaled by `1.5·α`. The force therefore always opposes the lateral flow
-component, which the mirrored-force test pins.
+**Model as found.** Body `+Y` is longitudinal. The X-plane flow angle is
+`atan2(−v_x, v_y)`, the Z-plane flow angle is `asin(v_z / |v|)`, drag opposes the
+velocity, the normal force is the component of body `+X` perpendicular to the
+flow scaled by `1.5·α_x`, and the side force is `lift_dir × v̂` scaled by
+`−0.8·β_z`. Each force therefore opposes the lateral flow component in its own
+plane, which the mirrored-force test pins.
 
-**Two documentation defects.**
-1. The module comment says the side force "completes that basis toward body
-   `+Z`" while the sideslip function calls `+Z` "right". The frame never defines
-   whether `+X` is dorsal or lateral, so "lift" and "side force" are labels that
-   cannot be validated against a real vehicle; only the restoring direction is
-   proven.
-2. `center_of_pressure_m` returns `+0.25·height` along the longitudinal axis —
-   nose-ward of the geometric centre — while the center of mass is fuel-weighted
-   aft. That is a **destabilizing** static margin, which is realistic for a
-   launch vehicle, but the function comment claims it "leaves static margin for
-   the controller". The comment describes the opposite sign of the modelled
-   physics.
+**Defect 1 — the lateral axes were undefined.** The module comment said the side
+force "completes that basis toward body `+Z`" while the sideslip function called
+`+Z` "right". Neither `+X` nor `+Z` had a stated relationship to the vehicle or
+to the frame built at spawn, so "lift" and "side force" were labels that could
+not be checked against the body frame; only the restoring direction was proven.
 
-**Not changed.** Correcting the comment would be cosmetic; correcting the
-center of pressure would change the aerodynamic torque and therefore the three
-committed baselines. It stays a modeling decision for a dedicated change.
+**Fix 1.** The authoritative body basis now lives in
+`rocket_dynamics::orientation_from_up_and_heading` and its module conventions:
+`+Y` longitudinal (tail-to-nose, thrust and roll), `+X`/`+Z` the two lateral
+axes with `X × Y = Z`; at spawn `+Y` is the pad normal and `+Z` the heading hint.
+The airframe is axisymmetric and roll is unanchored in coast, so neither lateral
+axis is a physical landmark. The aerodynamic model now names its quantities by
+axis: the X-plane flow angle `α_x` drives the `+X` normal force `Cn_x`, and the
+Z-plane flow angle `β_z` drives the `+Z` side force `Cn_z`. `angle_of_sideslip`
+no longer claims `+Z` is "right". The module comment states the per-axis
+convention explicitly.
+
+**Defect 2 — the static-margin comment had the wrong sign.**
+`center_of_pressure_m` returns `+0.25·height` along the longitudinal axis —
+nose-ward of the geometric centre — while the modelled center of mass is
+fuel-weighted aft. That is a **destabilizing** static margin, which is realistic
+for a launch vehicle, but the comment claimed it "leaves static margin for the
+controller". The comment now says the torque destabilizes the pitch/yaw axes and
+the controller must actively stabilize them; a new test pins
+`cop.y > com.y` for a fueled vehicle.
+
+**Residual — the two lateral slopes are not equal.** The coefficients apply
+`1.5·α_x` to the X plane and `−0.8·β_z` to the Z plane. For an axisymmetric body
+with no fins this anisotropy is arbitrary: roll about `+Y` is not anchored during
+coast, so the same world-relative flow can rotate between the two planes. The
+model is therefore not roll-invariant. Changing the slopes would change the
+aerodynamic torque and the three committed baselines, so it remains a modeling
+decision; the module doc records it as an approximation rather than a geometry
+result.
+
+**Residual — telemetry labels.** The presentation layer already names
+`roll_rate = ω_y`, `pitch_rate = ω_x`, `yaw_rate = ω_z`, so the pitch-plane flow
+is the Y-Z (Z) component. `telemetry.rs` nevertheless fills
+`angle_of_attack_deg` from the X-plane function and `sideslip_angle_deg` from the
+Z-plane function. That changes only the reported channels, not the force model,
+but `simulation_analysis` consumes `angle_of_attack_rad` for its maximum-AoA
+summary; correcting the mapping needs a deliberate review rather than a silent
+swap.
+
+**Not changed.** The center-of-pressure position itself is unchanged: moving it
+would change the aerodynamic torque and the three committed baselines.
 
 ## SC-04 — Per-thruster RCS allocation
 
@@ -343,9 +374,10 @@ no cutoff law. That was SC-05, now closed; the final orbit is 200.7 × 200.0 km.
 2. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
-3. **SC-03 — define the body lateral axes** in one place, then name the
-   aerodynamic coefficients from that definition and correct the static-margin
-   comment.
+3. **Lateral aerodynamic symmetry.** Decide whether the X and Z normal-force
+   slopes should be equal for the axisymmetric airframe, or whether the
+   asymmetry represents a deliberate (and documented) fin/geometry choice.
+   This changes aerodynamic torque, so it needs a baseline review.
 4. **Inclination convention checklist.** Every new consumer of a planet pole
    must state whether it needs the geometric pole (local east/north, J2
    symmetry) or the rotation axis (orbital elements, angular momentum). SC-08
@@ -354,7 +386,7 @@ no cutoff law. That was SC-05, now closed; the final orbit is 200.7 × 200.0 km.
 ## Validation
 
 The gate for this track is the project gate. Counts are the post-change values;
-the previous floor was 1,209 with `dem` and 1,157 without.
+the previous floor was 1,213 with `dem` and 1,161 without.
 
 | check | result |
 | --- | --- |
@@ -362,7 +394,7 @@ the previous floor was 1,209 with `dem` and 1,157 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,213 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,161 passed, 2 ignored |
+| `cargo test --features dem --lib` | 1,215 passed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,163 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
 | headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut on the 200.4 km apoapsis, one 1.2 s circularization burn, 200.7 x 200.0 km (e = 0.00005) accepted at T+1,711.5 s, stable through 90 min |

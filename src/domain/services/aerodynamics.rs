@@ -2,24 +2,42 @@
 //!
 //! All formulas consume the shared atmosphere model
 //! (`domain::services::atmosphere`). Forces are expressed in the vehicle body
-//! frame where +Y is the longitudinal axis; systems rotate them to the
+//! frame where +Y is the longitudinal axis, +X and +Z are the two lateral axes
+//! (`X × Y = Z`) as defined by `rocket_dynamics`; systems rotate them to the
 //! planet-inertial frame and feed the 6-DOF accumulators. Nothing here writes
 //! a transform (AGENTS.md section 17).
+//!
+//! ## Body axes
+//!
+//! The airframe is axisymmetric, so +X and +Z have no external landmark; they
+//! are the two lateral directions of the current attitude. The model therefore
+//! resolves the lateral flow into two per-axis planes instead of borrowing
+//! aircraft names:
+//!
+//! - the **X-plane flow angle** `α_x` is in-plane: the angle between the
+//!   velocity projection onto the body X-Y plane and the longitudinal +Y axis,
+//!   positive toward −X; its normal force acts along body +X;
+//! - the **Z flow angle** `β_z` is out-of-plane: the elevation of the velocity
+//!   out of the X-Y plane along +Z; its side force acts along `lift_dir × v̂`
+//!   (body +Z for nose-first flow).
 //!
 //! ## Model
 //!
 //! - Dynamic pressure: `q = ½·ρ·v²`.
 //! - Mach: `M = v / a`.
-//! - Angle of attack (pitch): `α = atan2(−v_x, v_y)` in body frame.
-//! - Sideslip: `β = asin(v_z / |v|)` in body frame.
+//! - X-plane flow angle: `α_x = atan2(−v_x, v_y)` in the body frame.
+//! - Z flow angle: `β_z = asin(v_z / |v|)` in the body frame.
 //! - Coefficients (analytic approximations, documented limits): constant base
-//!   drag `Cd = 0.3`, linear lift `Cl = 1.5·α`, linear side `Cy = −0.8·β`.
-//!   Tabulated data can replace these behind the same interface.
-//! - Drag opposes velocity. Signed pitch lift acts along body +X projected
-//!   perpendicular to velocity; signed side force completes that basis toward
-//!   body +Z for nose-first flight. Coefficient signs carry deflection direction.
-//! - Center of pressure is a simple geometric estimate (slightly above the
-//!   mid-length); aerodynamic torque is `τ = (r_CoP − r_COM) × F`.
+//!   drag `Cd = 0.3`, linear X normal `Cn_x = 1.5·α_x`, linear Z normal
+//!   `Cn_z = −0.8·β_z`. Tabulated data can replace these behind the same
+//!   interface. The two slopes differ although the body is axisymmetric; that
+//!   anisotropy is an analytic approximation, not a geometry result (see the
+//!   SC-03 residual in `docs/scientific_correctness_audit.md`).
+//! - Drag opposes velocity. The X normal force acts along body +X projected
+//!   perpendicular to velocity; the Z force acts along `lift_dir × v̂` for
+//!   nose-first flow. Coefficient signs carry deflection direction.
+//! - Center of pressure is a simple geometric estimate forward of the
+//!   mid-length; aerodynamic torque is `τ = (r_CoP − r_COM) × F`.
 
 use crate::domain::math::DVec3;
 
@@ -37,10 +55,11 @@ pub fn mach_number(speed_mps: f64, speed_of_sound_mps: f64) -> f64 {
     }
 }
 
-/// Angle of attack (pitch), radians, in the body frame. Positive when the nose
-/// is above the velocity vector.
+/// X-plane flow angle, radians, in the body frame: the angle of the velocity
+/// projection onto the body X-Y plane, measured from the longitudinal +Y axis
+/// toward −X. Positive when the velocity has a −X component.
 ///
-/// A zero air-relative velocity has no defined pitch angle. Returning `atan2`
+/// A zero air-relative velocity has no defined flow angle. Returning `atan2`
 /// on the signed-zero vector yields an arbitrary ±π, so the degenerate case is
 /// reported as zero, matching [`angle_of_sideslip`]. Aerodynamic forces already
 /// gate on airspeed, so this only affects recorded/sensed attitude telemetry.
@@ -52,8 +71,9 @@ pub fn angle_of_attack(body_velocity: DVec3) -> f64 {
     }
 }
 
-/// Sideslip angle, radians, in the body frame. Positive when the velocity has
-/// a +Z (right) body component.
+/// Z flow angle, radians, in the body frame: the elevation of the velocity out
+/// of the body X-Y plane along +Z. Positive when the velocity has a +Z
+/// component.
 pub fn angle_of_sideslip(body_velocity: DVec3) -> f64 {
     let speed = body_velocity.length();
     if speed < 1e-9 {
@@ -63,13 +83,15 @@ pub fn angle_of_sideslip(body_velocity: DVec3) -> f64 {
     }
 }
 
-/// Analytic aerodynamic coefficients: `(cd, cl, cy)` from angle of attack and
-/// sideslip. Linear models; documented approximations.
+/// Analytic aerodynamic coefficients for the two lateral body axes:
+/// `(cd, cn_x, cn_z)` from the X-plane and Z-plane flow angles. `cn_x` scales
+/// the normal force along +X; `cn_z` scales the side force along `lift_dir × v̂`
+/// (body +Z for nose-first flow). Linear models; documented approximations.
 pub fn aerodynamic_coefficients(alpha_rad: f64, beta_rad: f64) -> (f64, f64, f64) {
     let cd = 0.3;
-    let cl = 1.5 * alpha_rad;
-    let cy = -0.8 * beta_rad;
-    (cd, cl, cy)
+    let cn_x = 1.5 * alpha_rad;
+    let cn_z = -0.8 * beta_rad;
+    (cd, cn_x, cn_z)
 }
 
 /// How strongly relative nose bluntness raises base drag. An ablated (blunter)
@@ -79,18 +101,18 @@ pub const NOSE_BLUNTNNESS_DRAG_FACTOR: f64 = 0.5;
 
 /// Nose-bluntness-aware variant of [`aerodynamic_coefficients`]:
 /// `nose_radius_ratio = nose_radius_current / nose_radius_initial ≥ 1`.
-/// Ablation blunts the nose, raising Cd (and its base component); lift and
-/// side force are unchanged. A ratio of exactly 1 reproduces
+/// Ablation blunts the nose, raising Cd (and its base component); the two
+/// lateral normal coefficients are unchanged. A ratio of exactly 1 reproduces
 /// [`aerodynamic_coefficients`] bit-for-bit (regression-tested).
 pub fn aerodynamic_coefficients_with_nose_bluntness(
     alpha_rad: f64,
     beta_rad: f64,
     nose_radius_ratio: f64,
 ) -> (f64, f64, f64) {
-    let (base_cd, cl, cy) = aerodynamic_coefficients(alpha_rad, beta_rad);
+    let (base_cd, cn_x, cn_z) = aerodynamic_coefficients(alpha_rad, beta_rad);
     let bluntness_growth = (nose_radius_ratio.max(1.0) - 1.0).min(MAX_BLUNTNNESS_GROWTH);
     let cd = base_cd * (1.0 + NOSE_BLUNTNNESS_DRAG_FACTOR * bluntness_growth);
-    (cd, cl, cy)
+    (cd, cn_x, cn_z)
 }
 
 /// Cap on the modeled bluntness growth so extreme recession cannot produce
@@ -111,25 +133,25 @@ pub fn drag_force_body(
     -body_velocity / speed * (dynamic_pressure_pa * drag_coefficient * reference_area_m2)
 }
 
-/// Lift force in the body frame: along body +X projected perpendicular
-/// to the velocity, magnitude `q·Cl·A`.
+/// X-axis normal force in the body frame: along body +X projected
+/// perpendicular to the velocity, magnitude `q·Cn_x·A`.
 pub fn lift_force_body(
     dynamic_pressure_pa: f64,
-    lift_coefficient: f64,
+    normal_x_coefficient: f64,
     reference_area_m2: f64,
     body_velocity: DVec3,
 ) -> DVec3 {
     let Some(direction) = lift_direction(body_velocity) else {
         return DVec3::ZERO;
     };
-    direction * (dynamic_pressure_pa * lift_coefficient * reference_area_m2)
+    direction * (dynamic_pressure_pa * normal_x_coefficient * reference_area_m2)
 }
 
-/// Side force in the body frame: perpendicular to both velocity and lift,
-/// magnitude `q·Cy·A`.
+/// Z-axis side force in the body frame: perpendicular to both velocity and the
+/// X normal direction, magnitude `q·Cn_z·A`.
 pub fn side_force_body(
     dynamic_pressure_pa: f64,
-    side_coefficient: f64,
+    normal_z_coefficient: f64,
     reference_area_m2: f64,
     body_velocity: DVec3,
 ) -> DVec3 {
@@ -139,12 +161,13 @@ pub fn side_force_body(
     let speed = body_velocity.length();
     let vel_unit = body_velocity / speed;
     let side_dir = lift_dir.cross(vel_unit);
-    side_dir * (dynamic_pressure_pa * side_coefficient * reference_area_m2)
+    side_dir * (dynamic_pressure_pa * normal_z_coefficient * reference_area_m2)
 }
 
-/// Signed pitch coefficients require a fixed +X normal-force basis. Projecting
-/// longitudinal +Y flips this basis with pitch and makes yaw produce pitch lift.
-/// `None` when the lateral projection is degenerate (flow aligned with +X).
+/// Signed X coefficients require a fixed +X normal-force basis. Projecting
+/// longitudinal +Y instead would flip this basis with the flow angle and mix
+/// the two lateral planes. `None` when the lateral projection is degenerate
+/// (flow aligned with +X).
 fn lift_direction(body_velocity: DVec3) -> Option<DVec3> {
     let speed = body_velocity.length();
     if speed < 1e-9 {
@@ -161,9 +184,12 @@ fn lift_direction(body_velocity: DVec3) -> Option<DVec3> {
 }
 
 /// Simple geometric center-of-pressure estimate in the body frame, meters:
-/// slightly above the mid-length so a nose-heavy fueled vehicle leaves static
-/// margin for the controller. Documented approximation; refine with a real
-/// geometry model later.
+/// +0.25·height along +Y, forward (nose-ward) of the geometric center. The
+/// modeled center of mass is aft of the geometric center while propellant
+/// remains, so this is a **negative** static margin: the aerodynamic torque
+/// destabilizes the pitch/yaw axes and the controller must actively stabilize
+/// them. That is realistic for a launch vehicle. Documented approximation;
+/// refine with a real geometry model later.
 pub fn center_of_pressure_m(height_m: f64) -> DVec3 {
     DVec3::new(0.0, height_m * 0.25, 0.0)
 }
@@ -192,28 +218,28 @@ mod tests {
     fn signed_aerodynamic_coefficients_produce_mirrored_normal_forces() {
         let q = 20_000.0;
         for lateral in [-10.0, 10.0] {
-            let pitch_velocity = DVec3::new(lateral, 200.0, 0.0);
-            let (_, cl, _) = aerodynamic_coefficients(angle_of_attack(pitch_velocity), 0.0);
-            let lift = lift_force_body(q, cl, AREA, pitch_velocity);
+            let x_plane_velocity = DVec3::new(lateral, 200.0, 0.0);
+            let (_, cn_x, _) = aerodynamic_coefficients(angle_of_attack(x_plane_velocity), 0.0);
+            let x_force = lift_force_body(q, cn_x, AREA, x_plane_velocity);
             assert!(
-                lift.x * lateral < 0.0,
-                "pitch force must oppose lateral flow: {lift:?}"
+                x_force.x * lateral < 0.0,
+                "X normal force must oppose X-plane flow: {x_force:?}"
             );
             assert!(
-                lift.dot(pitch_velocity).abs() < 1e-6,
-                "lift must do no work"
+                x_force.dot(x_plane_velocity).abs() < 1e-6,
+                "X normal force must do no work"
             );
 
-            let yaw_velocity = DVec3::new(0.0, 200.0, lateral);
-            let (_, _, cy) = aerodynamic_coefficients(0.0, angle_of_sideslip(yaw_velocity));
-            let side = side_force_body(q, cy, AREA, yaw_velocity);
+            let z_plane_velocity = DVec3::new(0.0, 200.0, lateral);
+            let (_, _, cn_z) = aerodynamic_coefficients(0.0, angle_of_sideslip(z_plane_velocity));
+            let z_force = side_force_body(q, cn_z, AREA, z_plane_velocity);
             assert!(
-                side.z * lateral < 0.0,
-                "side force must oppose lateral flow: {side:?}"
+                z_force.z * lateral < 0.0,
+                "Z side force must oppose Z-plane flow: {z_force:?}"
             );
             assert!(
-                side.dot(yaw_velocity).abs() < 1e-6,
-                "side force must do no work"
+                z_force.dot(z_plane_velocity).abs() < 1e-6,
+                "Z side force must do no work"
             );
         }
     }
@@ -233,19 +259,19 @@ mod tests {
     }
 
     #[test]
-    fn angle_of_attack_reflects_pitch() {
+    fn x_plane_flow_angle_reflects_x_velocity() {
         assert!(angle_of_attack(DVec3::new(0.0, 10.0, 0.0)).abs() < 1e-9);
-        // Nose above velocity → negative x component → positive alpha.
+        // Velocity toward −X puts the nose on the +X side of the flow.
         let alpha = angle_of_attack(DVec3::new(-1.0, 10.0, 0.0));
         assert!(alpha > 0.0);
-        // Nose below velocity → positive x component → negative alpha.
+        // Velocity toward +X gives the mirrored negative angle.
         let alpha_down = angle_of_attack(DVec3::new(1.0, 10.0, 0.0));
         assert!(alpha_down < 0.0);
         assert!((alpha + alpha_down).abs() < 1e-9);
     }
 
     #[test]
-    fn zero_air_relative_velocity_has_zero_angle_of_attack() {
+    fn zero_air_relative_velocity_has_zero_flow_angles() {
         assert_eq!(angle_of_attack(DVec3::ZERO), 0.0);
         // Signed zeros must not produce ±π from atan2.
         assert_eq!(angle_of_attack(DVec3::new(-0.0, -0.0, 0.0)), 0.0);
@@ -254,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn sideslip_reflects_yaw_component() {
+    fn z_plane_flow_angle_reflects_z_velocity() {
         assert!(angle_of_sideslip(DVec3::new(0.0, 10.0, 0.0)).abs() < 1e-9);
         let beta = angle_of_sideslip(DVec3::new(0.0, 10.0, 1.0));
         assert!((beta - (1.0 / (101.0f64).sqrt()).asin()).abs() < 1e-9);
@@ -273,38 +299,61 @@ mod tests {
     }
 
     #[test]
-    fn lift_is_perpendicular_and_rises_with_alpha() {
+    fn x_normal_force_is_perpendicular_and_rises_with_x_flow() {
         let q = dynamic_pressure_q(1.225, 100.0);
         let vel = DVec3::new(-1.0, 10.0, 0.0);
-        let (_, cl, _) = aerodynamic_coefficients(angle_of_attack(vel), angle_of_sideslip(vel));
-        let lift = lift_force_body(q, cl, AREA, vel);
+        let (_, cn_x, _) = aerodynamic_coefficients(angle_of_attack(vel), angle_of_sideslip(vel));
+        let lift = lift_force_body(q, cn_x, AREA, vel);
         assert!(
             lift.dot(vel).abs() < 1e-6,
-            "lift must be perpendicular to velocity"
+            "the X normal force must be perpendicular to velocity"
         );
-        assert!((lift.length() - q * cl * AREA).abs() < 1e-6);
-        assert!(lift.y > 0.0, "positive alpha must produce upward lift");
+        assert!((lift.length() - q * cn_x * AREA).abs() < 1e-6);
+        assert!(
+            lift.x * vel.x < 0.0 && lift.y > 0.0,
+            "a positive X-plane flow angle must produce a restoring +X force"
+        );
     }
 
     #[test]
-    fn side_force_is_mutually_perpendicular() {
+    fn lateral_force_planes_are_the_two_body_axes() {
+        let q = dynamic_pressure_q(1.225, 100.0);
+        // X-plane flow: force in the X-Y plane, no Z component.
+        let x_vel = DVec3::new(1.0, 10.0, 0.0);
+        let (_, cn_x, _) =
+            aerodynamic_coefficients(angle_of_attack(x_vel), angle_of_sideslip(x_vel));
+        let x_force = lift_force_body(q, cn_x, AREA, x_vel);
+        assert!(x_force.x.abs() > 0.0);
+        assert!(x_force.z.abs() < 1e-9, "X-plane force must not leak into Z");
+
+        // Z-plane flow: force in the Y-Z plane, no X component.
+        let z_vel = DVec3::new(0.0, 10.0, 1.0);
+        let (_, _, cn_z) =
+            aerodynamic_coefficients(angle_of_attack(z_vel), angle_of_sideslip(z_vel));
+        let z_force = side_force_body(q, cn_z, AREA, z_vel);
+        assert!(z_force.z.abs() > 0.0);
+        assert!(z_force.x.abs() < 1e-9, "Z-plane force must not leak into X");
+    }
+
+    #[test]
+    fn z_side_force_is_mutually_perpendicular() {
         let q = dynamic_pressure_q(1.225, 100.0);
         let vel = DVec3::new(0.0, 10.0, 1.0);
-        let (_, _, cy) = aerodynamic_coefficients(angle_of_attack(vel), angle_of_sideslip(vel));
+        let (_, _, cn_z) = aerodynamic_coefficients(angle_of_attack(vel), angle_of_sideslip(vel));
         let lift = lift_force_body(q, 0.0, AREA, vel);
-        let side = side_force_body(q, cy, AREA, vel);
+        let side = side_force_body(q, cn_z, AREA, vel);
         assert!(side.dot(vel).abs() < 1e-6);
         assert!(side.dot(lift).abs() < 1e-6);
-        assert!((side.length() - q * cy.abs() * AREA).abs() < 1e-6);
+        assert!((side.length() - q * cn_z.abs() * AREA).abs() < 1e-6);
     }
 
     #[test]
     fn no_aero_force_when_aligned_with_flow() {
         let q = dynamic_pressure_q(1.225, 100.0);
         let vel = DVec3::new(0.0, 100.0, 0.0);
-        let (_, cl, cy) = aerodynamic_coefficients(0.0, 0.0);
-        assert_eq!(lift_force_body(q, cl, AREA, vel), DVec3::ZERO);
-        assert_eq!(side_force_body(q, cy, AREA, vel), DVec3::ZERO);
+        let (_, cn_x, cn_z) = aerodynamic_coefficients(0.0, 0.0);
+        assert_eq!(lift_force_body(q, cn_x, AREA, vel), DVec3::ZERO);
+        assert_eq!(side_force_body(q, cn_z, AREA, vel), DVec3::ZERO);
     }
 
     #[test]
@@ -320,9 +369,24 @@ mod tests {
     }
 
     #[test]
-    fn center_of_pressure_above_mid_length() {
+    fn center_of_pressure_is_forward_of_the_geometric_center() {
         let cop = center_of_pressure_m(70.0);
         assert_eq!(cop, DVec3::new(0.0, 17.5, 0.0));
+    }
+
+    #[test]
+    fn fueled_center_of_mass_is_aft_of_the_center_of_pressure() {
+        use crate::domain::services::rocket_dynamics::rocket_inertia_tensor;
+        let (_, com) = rocket_inertia_tensor(25_600.0, 100_000.0, 1.85, 70.0);
+        let cop = center_of_pressure_m(70.0);
+        assert!(
+            com.y < 0.0,
+            "fuel-weighted center of mass must be aft of the geometric center"
+        );
+        assert!(
+            cop.y > com.y,
+            "CP forward of COM is a negative (destabilizing) static margin"
+        );
     }
 
     #[test]
@@ -337,10 +401,10 @@ mod tests {
         // Old-vs-new comparison: an unablated nose (ratio 1) must give the
         // identical coefficients the pre-ablation model produced.
         for (alpha, beta) in [(0.0, 0.0), (0.1, -0.05), (-0.35, 0.2)] {
-            let (cd_old, cl_old, cy_old) = aerodynamic_coefficients(alpha, beta);
-            let (cd_new, cl_new, cy_new) =
+            let (cd_old, cn_x_old, cn_z_old) = aerodynamic_coefficients(alpha, beta);
+            let (cd_new, cn_x_new, cn_z_new) =
                 aerodynamic_coefficients_with_nose_bluntness(alpha, beta, 1.0);
-            assert_eq!((cd_old, cl_old, cy_old), (cd_new, cl_new, cy_new));
+            assert_eq!((cd_old, cn_x_old, cn_z_old), (cd_new, cn_x_new, cn_z_new));
         }
     }
 
@@ -348,12 +412,17 @@ mod tests {
     fn ablation_grows_only_base_drag() {
         let alpha = 0.15;
         let beta = -0.03;
-        let (_, cl, cy) = aerodynamic_coefficients(alpha, beta);
+        let (_, cn_x, cn_z) = aerodynamic_coefficients(alpha, beta);
         let mut previous_cd = aerodynamic_coefficients(alpha, beta).0;
         for ratio in [1.5_f64, 2.0, 3.0] {
-            let (cd, cl_r, cy_r) = aerodynamic_coefficients_with_nose_bluntness(alpha, beta, ratio);
+            let (cd, cn_x_r, cn_z_r) =
+                aerodynamic_coefficients_with_nose_bluntness(alpha, beta, ratio);
             assert!(cd > previous_cd, "Cd must grow with bluntness ({ratio})");
-            assert_eq!((cl_r, cy_r), (cl, cy), "lift/side coefficients unchanged");
+            assert_eq!(
+                (cn_x_r, cn_z_r),
+                (cn_x, cn_z),
+                "lateral normal coefficients unchanged"
+            );
             assert!(cd <= 0.6 + 1e-12, "Cd capped at 2x baseline");
             previous_cd = cd;
         }

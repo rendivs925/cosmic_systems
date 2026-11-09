@@ -91,15 +91,15 @@ pub fn aerodynamic_forces(
             } else {
                 1.0
             };
-        let (cd, cl, cy) = aerodynamic_coefficients_with_nose_bluntness(
+        let (cd, cn_x, cn_z) = aerodynamic_coefficients_with_nose_bluntness(
             angle_of_attack(body_velocity),
             angle_of_sideslip(body_velocity),
             nose_radius_ratio,
         );
         let q = conditions.dynamic_pressure_pa;
         let force_body = drag_force_body(q, cd, reference_area_m2, body_velocity)
-            + lift_force_body(q, cl, reference_area_m2, body_velocity)
-            + side_force_body(q, cy, reference_area_m2, body_velocity);
+            + lift_force_body(q, cn_x, reference_area_m2, body_velocity)
+            + side_force_body(q, cn_z, reference_area_m2, body_velocity);
         aero.force_body = force_body;
         force_accum.add_force_n(rocket.dynamics.orientation * force_body);
     }

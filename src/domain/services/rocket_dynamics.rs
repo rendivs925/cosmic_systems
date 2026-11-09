@@ -11,7 +11,16 @@
 //! - Position/velocity are in the planet-centered inertial meter frame.
 //! - Orientation is a body→world quaternion; angular velocity and torque are
 //!   in the body frame.
-//! - The body +Y axis is the rocket's longitudinal (roll) axis.
+//! - The body frame is right-handed with `X × Y = Z`.
+//! - Body +Y is the longitudinal (roll) axis: tail-to-nose, the thrust axis and
+//!   the axis attitude commands point at the target.
+//! - Body +X and +Z are the two lateral axes. [`orientation_from_up_and_heading`]
+//!   sets +Y along the pad normal and +Z along the heading hint at spawn, which
+//!   fixes +X = +Y × +Z. The airframe is axisymmetric, and roll about +Y is
+//!   unconstrained in coast, so neither lateral axis has an external landmark:
+//!   X and Z are simply the two lateral directions of the current attitude.
+//!   Physics consumers therefore address lateral forces and torques per axis
+//!   rather than through aircraft "pitch"/"yaw" plane names.
 //! - `position_m` is the geometric center of the currently attached
 //!   cylindrical assembly. Each `RocketEngine::position_m` is instead local to
 //!   its own stage cylinder center and is translated before attached-stack
