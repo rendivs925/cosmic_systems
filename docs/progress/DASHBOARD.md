@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-09.
-Last code checkpoint: `4fb161b` (2026-11-09).
+Last code checkpoint: `525d2d8` (2026-11-09).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,14 +59,14 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 4fb161b |
-| `cargo check --all-targets --features dem` | PASS | 4fb161b |
-| `cargo check --no-default-features` | PASS | 4fb161b |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 4fb161b |
-| `cargo test --features dem --lib` | 1209 passed, 0 failed, 2 ignored | 4fb161b |
-| `cargo test --no-default-features --lib` | 1157 passed, 0 failed, 2 ignored | 4fb161b |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 4fb161b |
-| `cargo build --release --features dem` | PASS | 4fb161b |
+| `cargo fmt --check` | PASS | 525d2d8 |
+| `cargo check --all-targets --features dem` | PASS | 525d2d8 |
+| `cargo check --no-default-features` | PASS | 525d2d8 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 525d2d8 |
+| `cargo test --features dem --lib` | 1209 passed, 0 failed, 2 ignored | 525d2d8 |
+| `cargo test --no-default-features --lib` | 1157 passed, 0 failed, 2 ignored | 525d2d8 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 525d2d8 |
+| `cargo build --release --features dem` | PASS | 525d2d8 |
 | three-mode smoke (25 s each) | PASS — all three exit 124, zero hard errors; `39bed95` | `39bed95` |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |

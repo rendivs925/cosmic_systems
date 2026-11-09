@@ -7,9 +7,11 @@ a roadmap task.
 
 **Method.** Each item is answered by reading the authoritative implementation
 and its tests, then naming what is proven and what is not. A change is made only
-when the defect is concrete and the fix does not require regenerating the three
-committed flight baselines. Status follows the project rule: `IMPLEMENTED` means
-code plus at least one test, not runtime-verified flight.
+when the defect is concrete. A fix may not silently move a committed flight
+baseline: either it leaves all three fixtures unchanged, or the affected fixture
+is re-recorded through the documented reviewed workflow and the reason is
+recorded here. Status follows the project rule: `IMPLEMENTED` means code plus at
+least one test, not runtime-verified flight.
 
 | ID | Question | Verdict |
 | --- | --- | --- |
@@ -301,4 +303,4 @@ the previous floor was 1,202 with `dem` and 1,150 without.
 | `cargo test --features dem --lib` | 1,209 passed, 2 ignored |
 | `cargo test --no-default-features --lib` | 1,157 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
-| headless Falcon 9 ascent, 900 s | deterministic; plane 25.81° about the rotation axis; insertion blocked by SC-05 |
+| headless Falcon 9 ascent | 120 s run reproduced bit-identically; plane 25.81° about the rotation axis; insertion still blocked by SC-05 |
