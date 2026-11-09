@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-09. Last code checkpoint: `ad5af7e`.
+Snapshot: 2026-11-09. Last code checkpoint: `5d98695`.
 
 ---
 

@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-09.
-Last code checkpoint: `ad5af7e` (2026-11-09).
+Last code checkpoint: `5d98695` (2026-11-09).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,15 +59,15 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | ad5af7e |
-| `cargo check --all-targets --features dem` | PASS | ad5af7e |
-| `cargo check --no-default-features` | PASS | ad5af7e |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | ad5af7e |
-| `cargo test --features dem --lib` | 1209 passed, 0 failed, 2 ignored | ad5af7e |
-| `cargo test --no-default-features --lib` | 1157 passed, 0 failed, 2 ignored | ad5af7e |
-| `openspec validate --all --strict` | 43 passed, 0 failed | ad5af7e |
-| `cargo build --release --features dem` | PASS | ad5af7e |
-| three-mode smoke (25 s each) | PASS — all three exit 124, zero hard errors; `39bed95` | `39bed95` |
+| `cargo fmt --check` | PASS | 5d98695 |
+| `cargo check --all-targets --features dem` | PASS | 5d98695 |
+| `cargo check --no-default-features` | PASS | 5d98695 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 5d98695 |
+| `cargo test --features dem --lib` | 1213 passed, 0 failed, 2 ignored | 5d98695 |
+| `cargo test --no-default-features --lib` | 1161 passed, 0 failed, 2 ignored | 5d98695 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 5d98695 |
+| `cargo build --release --features dem` | PASS | 5d98695 |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 5d98695 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
