@@ -19,7 +19,7 @@ least one test, not runtime-verified flight.
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **PARTIAL — model self-consistent; two documentation defects** |
 | SC-04 | Per-thruster RCS allocation | **GAP — no thruster model; scalar per-axis clamp** |
-| SC-05 | Closed-loop orbit insertion | **PARTIAL — energy cutoff and two-apse trim; relight blocked** |
+| SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
 | SC-08 | Orbital inclination measured from the geometric pole instead of the rotation axis | **DEFECT — fixed; one baseline regenerated** |
@@ -160,32 +160,67 @@ circularize when within 25 km and |ṙ| ≤ 25 m/s of the target apoapsis. The
 completion test is `LowEarthOrbitTarget::matches_state_in_reference_frame`
 (±25 km on both apsides, eccentricity ≤ 0.02, inclination within ±2°).
 
-**Verdict.** PARTIAL. The loop closes on **acceptance**, not on the burn: there
-is no throttle cut targeted at the apoapsis, no eccentricity or plane-error
-correction law, and no post-insertion trim. A state that satisfies the tolerance
-is accepted even if it was reached by overshoot.
+**Verdict.** FIXED. The ascent cuts on the target apoapsis, one circularization
+burn at that apsis raises the periapsis to the same radius, and the accepted
+state lies inside every acceptance condition.
 
-**2026-11-09 update after the mass fix (SC-06).** The ascent now ends on orbital
-energy instead of burning to depletion: it cuts at 137.8 km into a 292 × 106 km
-orbit (e = 0.014) with about 18 t of upper-stage propellant still aboard, where
-the old data ended on a hyperbolic arc with empty tanks. Insertion is still not
-complete, for two measured reasons:
+**Defect 1 — the cutoff targeted the wrong quantity.** The first fix cut the
+ascent when the osculating semi-major axis reached the target orbital radius.
+Energy is reached before the vehicle is high enough: the burn ended at 137.8 km
+with the apoapsis already at 292 km, so the insertion phase inherited altitude
+it had to remove, and a retro trim fired away from periapsis deorbited the
+vehicle. The cut now targets the osculating **apoapsis** — the classical
+profile. The ascent only has to raise one apsis, the coast reaches it, and the
+circularization burn is a small prograde burn at that point.
 
-1. The cutoff altitude is 62 km below the target. The stage reaches the target
-   semi-major axis before it reaches 200 km, so an energy-triggered cutoff is
-   still a compromise; a real ascent must shape the trajectory so both coincide
-   (a closed-loop ascent law, not just a cutoff).
-2. The insertion trim correctly commands the prograde burn near apoapsis, but
-   the upper-stage engine never ignites: the headless log shows
-   `trim commanded with no running engine stage=1 states=[(Off, 0, 3)]` with a
-   full ignition budget. `command_engine_lifecycle` leaves it `Off`. That
-   lifecycle defect is the next concrete blocker; until it is fixed the trim
-   cannot raise the periapsis and the orbit stays 292 × 106 km.
+**Defect 2 — the upper stage never relit for the trim.** `command_engine_lifecycle`
+was not at fault: the engine was `Off` with a full ignition budget. The trim
+law was. The first version started the circularization burn within 5 km of
+apoapsis, one tick of thrust pushed the apsis outside that band, the next tick
+commanded zero throttle and shut the engine down, and the following tick
+re-ignited it. Four ticks consumed all three ignitions and left the engine
+`Depleted`. Two changes close this:
 
-The trim law itself is now a two-apse law (raise the apoapsis with a prograde
-burn, raise the periapsis near apoapsis, lower an overshoot near periapsis). A
-first version without the periapsis guard retro-burned continuously and
-deorbited the vehicle; the guarded version holds a stable orbit.
+- The burn latches on the authoritative running-engine state, so it continues
+  until the periapsis reaches its own 1 km deadband instead of stopping on a
+  band test.
+- Acceptance no longer ends a trim burn that is in progress; the ±25 km
+  predicate would otherwise cut the circularization burn at its lower edge
+  (175.7 km periapsis in the measured run).
+
+**Defect 3 — the burn started before the apsis.** A distance band at apoapsis
+fires while the vehicle is still climbing, and a prograde burn then makes the
+apoapsis recede; the periapsis can only chase the current radius and the burn
+never terminates. A 200 m band still drifted the final apoapsis to 223 km. The
+start is now the **radial-velocity crossing** (|ṙ| ≤ 0.5 m/s within 1 km of the
+apsis), which places the ignition within a few metres of the true apsis. The
+same test guards the retro overshoot at periapsis.
+
+**Measured** (headless Starbase, 5,400 s of simulated time, deterministic):
+
+| event | t | state |
+| --- | --- | --- |
+| stage 1 separation | 144.2 s | 40,600 kg shed, 112,898 kg upper stage |
+| ascent cut | 448.1 s | 137.77 km, 7,823 m/s, apo 200.44 km, peri 67.59 km |
+| circularization burn | 1,710.3–1,711.5 s | 281 kg consumed, one ignition |
+| insertion accepted | 1,711.5 s | **200.72 × 199.98 km, e = 0.00005** |
+| end of run | 5,400 s | 200.65 × 200.05 km, 23,919 kg |
+
+The accepted state satisfies the full predicate: both apsides within ±25 km,
+eccentricity ≤ 0.02, and the plane within ±2° of the Starbase geocentric
+inclination (about the physical rotation axis, SC-08). The upper stage finishes
+with about 18.0 t of propellant and one ignition still available.
+
+**Tests.** Four ECS guidance tests pin the law: a prograde burn at the apsis, the
+running-burn latch away from the apsis, no burn before the apsis, and no burn on
+a circular orbit. The ascent-predicate test was updated for the new handoff: an
+unsafe periapsis now cuts the ascent one tick earlier and is handed to the trim
+law, which keeps it under thrust.
+
+**Residual.** The ascent pitch program is still open-loop (schedule plus the
+radial-velocity-nulling trim above 80 km); the insertion law trims the apsides
+but not the orbital plane. A plane error is only observed by the acceptance
+predicate, never corrected by a burn.
 
 ## SC-06 — Falcon 9 data
 
@@ -294,30 +329,24 @@ the mirror orbit) and the recording still ends in `Orbit` with thrust cut. Only
 that fixture changed; `ascent` and `ascent-gravity-turn` match their committed
 files.
 
-**Remaining blocker.** Insertion still does not complete for the Falcon 9 ascent
-in 900 s, because the apsis/eccentricity condition never matches — the ascent
-over-burns to a 1,468 km, e=0.31 arc. That is SC-05 (no throttle cutoff law),
-not a frame issue.
+**Follow-up.** With that fix the Falcon 9 ascent could reach `Orbit` for the
+first time, but it over-burned to a 1,468 km, e=0.31 arc because the ascent had
+no cutoff law. That was SC-05, now closed; the final orbit is 200.7 × 200.0 km.
 
 ---
 
 ## Next steps, in order of physical impact
 
-1. **SC-05 — upper-stage relight.** The insertion trim is correct but the
-   engine stays `Off` with an unused ignition budget. Fix the lifecycle/ullage
-   interaction, then verify the trim raises the 106 km periapsis to the 200 km
-   target. After that, close the ascent loop so the energy cutoff and the target
-   altitude coincide instead of cutting 62 km low.
-2. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
+1. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
    placement, failure, or propellant cost. This is the largest remaining gap in
-   the attitude loop.
-3. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
+   the attitude loop, and the reason a plane error cannot be trimmed.
+2. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
-4. **SC-03 — define the body lateral axes** in one place, then name the
+3. **SC-03 — define the body lateral axes** in one place, then name the
    aerodynamic coefficients from that definition and correct the static-margin
    comment.
-5. **Inclination convention checklist.** Every new consumer of a planet pole
+4. **Inclination convention checklist.** Every new consumer of a planet pole
    must state whether it needs the geometric pole (local east/north, J2
    symmetry) or the rotation axis (orbital elements, angular momentum). SC-08
    was exactly that confusion.
@@ -325,7 +354,7 @@ not a frame issue.
 ## Validation
 
 The gate for this track is the project gate. Counts are the post-change values;
-the previous floor was 1,202 with `dem` and 1,150 without.
+the previous floor was 1,209 with `dem` and 1,157 without.
 
 | check | result |
 | --- | --- |
@@ -333,7 +362,7 @@ the previous floor was 1,202 with `dem` and 1,150 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,209 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,157 passed, 2 ignored |
+| `cargo test --features dem --lib` | 1,213 passed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,161 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
-| headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut at 137.8 km into 292 x 106 km with propellant left; stable through 90 min; insertion relight blocked (SC-05) |
+| headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut on the 200.4 km apoapsis, one 1.2 s circularization burn, 200.7 x 200.0 km (e = 0.00005) accepted at T+1,711.5 s, stable through 90 min |

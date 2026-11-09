@@ -27,8 +27,10 @@ use bevy::prelude::*;
 /// coasted to a stop 24 km below the target.
 const INSERTION_DEADBAND_M: f64 = 1_000.0;
 
-/// Minimum altitude for the energy cutoff that ends the ascent burn.
-const INSERTION_MIN_ALTITUDE_M: f64 = 130_000.0;
+/// Minimum altitude for the ascent cutoff. The cutoff is targeted at the
+/// osculating apoapsis, which would otherwise be a meaningless few kilometres
+/// on the pad; 100 km also keeps the cutoff above the sensible atmosphere.
+const INSERTION_MIN_ALTITUDE_M: f64 = 100_000.0;
 
 /// Altitude above which ascent replaces the open-loop pitch ramp with a
 /// radial-velocity-nulling tilt about the local horizontal.
@@ -48,8 +50,16 @@ const RADIAL_RATE_MAX_MPS: f64 = 250.0;
 const RADIAL_NULL_GAIN: f64 = 1.0 / 1_500.0;
 const RADIAL_TILT_LIMIT: f64 = 0.35;
 
-/// Distance from apoapsis inside which the circularization burn is allowed.
-const NEAR_APSIS_BAND_M: f64 = 5_000.0;
+/// Radial-speed tolerance for "the vehicle is at an apsis", m/s. The osculating
+/// apsis is where the radial speed crosses zero, and near it the radial rate
+/// changes by only ~0.1 m/s per second, so this captures the crossing within a
+/// few metres instead of several kilometres.
+const APSIS_RADIAL_SPEED_TOLERANCE_MPS: f64 = 0.5;
+
+/// Distance-to-apsis sanity bound for the radial-speed test, meters. It keeps
+/// the apoapsis crossing from also matching a periapsis of a nearly circular
+/// orbit.
+const APSIS_CAPTURE_DISTANCE_M: f64 = 1_000.0;
 
 /// Guidance can command an engine start, so it uses the stage's available
 /// thrust envelope rather than the currently running engine set. The active
@@ -287,9 +297,17 @@ pub fn guidance_system(
             _ => {}
         }
 
+        // A trim burn already in progress owns the throttle until its own
+        // tighter deadband stops it. The acceptance predicate has a ±25 km
+        // band, so accepting in the middle of the circularization burn would
+        // end the burn tens of kilometres short of the target.
+        let core_burning = propulsion
+            .active_core_stage()
+            .is_some_and(|stage| stage.has_running_engines());
         if target_orbit_reached
             && *mission_state == RocketMissionState::Orbit
             && autopilot.mode == AutopilotMode::OrbitInsertion
+            && !core_burning
         {
             autopilot.mode = AutopilotMode::Off;
         }
@@ -364,20 +382,21 @@ pub fn guidance_system(
                     }
                 }
 
-                // Cut on orbital energy, not on an apsis. A burn near the
-                // periapsis raises the apoapsis first, so waiting for the
-                // periapsis to reach the target burns far past the energy of
-                // the target orbit and ends on a hyperbolic arc. The target
-                // circular orbit has semi-major axis = target radius; the
-                // altitude gate keeps a steep early trajectory from ending the
-                // burn before the vehicle is above the atmosphere.
-                let target_semi_major_m =
+                // Cut when the osculating apoapsis reaches the target altitude,
+                // then coast up to it. An energy cutoff ends the burn at a
+                // lower altitude with the apoapsis already above the target:
+                // the target semi-major axis is reached while the trajectory
+                // still has a large radial component, so the coast overshoots
+                // and the insertion trim has to remove altitude afterwards.
+                // Apoapsis-targeted cutoff is the classical ascent profile:
+                // the burn only has to raise one apsis, and circularization at
+                // apoapsis is a small prograde burn.
+                let target_apoapsis_radius =
                     radius_m + autopilot.target_orbit.target_apoapsis_altitude_m;
-                let energy_reached = state_elements.semi_major_axis_m.is_finite()
-                    && state_elements.semi_major_axis_m
-                        >= target_semi_major_m - INSERTION_DEADBAND_M;
+                let apoapsis_reached = state_elements.apoapsis_m.is_finite()
+                    && state_elements.apoapsis_m >= target_apoapsis_radius;
                 let above_atmosphere = altitude_m >= INSERTION_MIN_ALTITUDE_M;
-                if target_orbit_reached || (energy_reached && above_atmosphere) {
+                if target_orbit_reached || (apoapsis_reached && above_atmosphere) {
                     autopilot.mode = AutopilotMode::OrbitInsertion;
                     commands.throttle_cmd = 0.0;
                 }
@@ -433,11 +452,29 @@ pub fn guidance_system(
                 // apoapsis lowered near periapsis, so each burn waits for its
                 // own apsis. Firing the retro trim anywhere would lower the
                 // periapsis into the atmosphere and deorbit the vehicle.
-                let near_apoapsis = state_elements.apoapsis_m - radius <= NEAR_APSIS_BAND_M;
-                let near_periapsis = radius - state_elements.periapsis_m <= NEAR_APSIS_BAND_M;
+                // An apsis is a radial-velocity crossing, not a distance band.
+                // Starting the circularization burn a few hundred metres
+                // before apoapsis makes the apoapsis recede ahead of the
+                // vehicle: the periapsis can then only chase the current
+                // radius while the apoapsis climbs, which drifted the result
+                // from 200 km to 223 km.
+                let at_apsis =
+                    inertial_velocity_mps.dot(up_dir).abs() <= APSIS_RADIAL_SPEED_TOLERANCE_MPS;
+                let near_apoapsis =
+                    at_apsis && state_elements.apoapsis_m - radius <= APSIS_CAPTURE_DISTANCE_M;
+                let near_periapsis =
+                    at_apsis && radius - state_elements.periapsis_m <= APSIS_CAPTURE_DISTANCE_M;
+                // Latch the circularization burn once it starts. The first
+                // tick of thrust changes the osculating apsis enough to leave
+                // the apsis start band even though the periapsis is still far
+                // below target; stopping there and re-lighting a tick later
+                // burned through the upper stage's whole ignition budget in
+                // four ticks and left the engine Depleted. A running engine is
+                // the authoritative "this burn is in progress" flag, so no new
+                // autopilot state is needed.
                 let raise_apoapsis =
                     state_elements.apoapsis_m < target_apoapsis_m - INSERTION_DEADBAND_M;
-                let raise_periapsis = near_apoapsis
+                let raise_periapsis = (near_apoapsis || core_burning)
                     && state_elements.periapsis_m < target_periapsis_m - INSERTION_DEADBAND_M;
                 if raise_apoapsis || raise_periapsis {
                     commands.target_attitude = prograde_attitude(inertial_velocity_mps);
@@ -687,7 +724,7 @@ pub fn guidance_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entities::rocket::Rocket;
+    use crate::domain::entities::rocket::{EngineState, Rocket};
     use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::body_orientation::BodyOrientation;
     use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
@@ -792,6 +829,217 @@ mod tests {
                 },
             ))
             .id()
+    }
+
+    /// Spawn a coasting upper stage in the insertion phase, with the engine
+    /// either off or already running to represent a burn in progress.
+    fn spawn_insertion_rocket(
+        app: &mut App,
+        position_m: DVec3,
+        inertial_velocity_mps: DVec3,
+        engines_running: bool,
+    ) -> Entity {
+        let mut vehicle = Rocket::falcon9_test_fixture();
+        let propellant_remaining_kg: Vec<f32> = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        for engine in &mut vehicle.stages[1].engines {
+            if engines_running {
+                engine.state = EngineState::Running;
+                engine.ignition_count = 1;
+            } else {
+                engine.reset_lifecycle();
+            }
+        }
+        app.world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        position_m,
+                        inertial_velocity_mps,
+                        DQuat::from_rotation_arc(DVec3::Y, position_m.normalize()),
+                        100_000.0,
+                        DMat3::IDENTITY,
+                        DVec3::ZERO,
+                    ),
+                },
+                RocketGeometry {
+                    radius_m: 1.85,
+                    height_m: 70.0,
+                    lower_extent_y_m: -35.0,
+                },
+                RocketMissionState::Orbit,
+                RocketAutopilot {
+                    mode: AutopilotMode::OrbitInsertion,
+                    ..Default::default()
+                },
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 1,
+                    propellant_remaining_kg,
+                    booster_attachment: BoosterAttachmentState::Detached,
+                    throttle: 0.9,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 10.0,
+                    ullage_settle_time_s: 2.0,
+                    separations_count: 1,
+                    attached_payload_kg: 0.0,
+                },
+                RocketFlightConditions::from_sample(FlightConditions {
+                    atmosphere_relative_velocity_mps: DVec3::ZERO,
+                    airspeed_mps: 0.0,
+                    ..default()
+                }),
+                TerrainCollisionState::default(),
+                OrbitalElements::default(),
+                RocketCommands::default(),
+                RocketPlanetBinding {
+                    planet_name: CelestialBodyId::earth(),
+                },
+            ))
+            .id()
+    }
+
+    fn insertion_app() -> App {
+        let orientation = earth_orientation();
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let mut app = App::new();
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.insert_resource(earth_snapshot(orientation));
+        app.world_mut().spawn(PlanetComponent {
+            domain_planet: earth,
+            material: Handle::default(),
+            has_texture: false,
+            base_reflectance: 1.0,
+            base_roughness: 1.0,
+        });
+        app.add_systems(Update, guidance_system);
+        app
+    }
+
+    /// Build a state exactly on the orbit with the given apsides. The radial
+    /// speed is derived from the orbit rather than chosen, so the apsides the
+    /// guidance computes match the arguments.
+    fn insertion_state(
+        radius_m: f64,
+        apoapsis_m: f64,
+        periapsis_m: f64,
+        radial_sign: f64,
+    ) -> (DVec3, DVec3) {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let mu = gravitational_parameter(earth.mass_kg);
+        let semi_major_m = 0.5 * (apoapsis_m + periapsis_m);
+        let tangential_speed_mps = (mu * apoapsis_m * periapsis_m / semi_major_m).sqrt() / radius_m;
+        let speed_squared_m2_s2 = mu * (2.0 / radius_m - 1.0 / semi_major_m);
+        let radial_speed_mps = (speed_squared_m2_s2 - tangential_speed_mps.powi(2))
+            .max(0.0)
+            .sqrt()
+            * radial_sign;
+        (
+            DVec3::X * radius_m,
+            DVec3::Y * tangential_speed_mps + DVec3::X * radial_speed_mps,
+        )
+    }
+
+    /// At an apsis crossing with the periapsis below target, insertion must
+    /// command a prograde circularization burn.
+    #[test]
+    fn insertion_starts_a_prograde_burn_at_the_apoapsis() {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let surface_m = earth.radius_km as f64 * 1_000.0;
+        let (position_m, velocity_mps) = insertion_state(
+            surface_m + 200_000.0,
+            surface_m + 200_000.0,
+            surface_m + 68_000.0,
+            0.0,
+        );
+        let mut app = insertion_app();
+        let rocket = spawn_insertion_rocket(&mut app, position_m, velocity_mps, false);
+        app.update();
+
+        let commands = app.world().get::<RocketCommands>(rocket).unwrap();
+        let fired = commands.target_attitude * DVec3::Y;
+        assert_eq!(commands.throttle_cmd, 1.0, "apoapsis trim must light");
+        assert!(
+            fired.dot(velocity_mps.normalize()) > 0.99,
+            "the circularization burn must be prograde"
+        );
+    }
+
+    /// A burn that has started must continue even after the apsis test stops
+    /// matching; otherwise the engine cycles on/off and burns its ignition
+    /// budget without circularizing.
+    #[test]
+    fn insertion_burn_latches_until_the_periapsis_target() {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let surface_m = earth.radius_km as f64 * 1_000.0;
+        // Fifty metres past apoapsis: outside the radial-speed crossing test,
+        // still far from the periapsis target.
+        let (position_m, velocity_mps) = insertion_state(
+            surface_m + 200_000.0 - 50.0,
+            surface_m + 200_000.0,
+            surface_m + 68_000.0,
+            -1.0,
+        );
+        let mut app = insertion_app();
+        let rocket = spawn_insertion_rocket(&mut app, position_m, velocity_mps, true);
+        app.update();
+
+        let commands = app.world().get::<RocketCommands>(rocket).unwrap();
+        assert_eq!(
+            commands.throttle_cmd, 1.0,
+            "a running circularization burn must not be cut by the apsis test"
+        );
+    }
+
+    /// No burn before the apsis: thrust applied while still climbing makes the
+    /// apoapsis recede and the periapsis target unreachable.
+    #[test]
+    fn insertion_does_not_start_before_the_apoapsis() {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let surface_m = earth.radius_km as f64 * 1_000.0;
+        let (position_m, velocity_mps) = insertion_state(
+            surface_m + 195_000.0,
+            surface_m + 200_000.0,
+            surface_m + 68_000.0,
+            1.0,
+        );
+        let mut app = insertion_app();
+        let rocket = spawn_insertion_rocket(&mut app, position_m, velocity_mps, false);
+        app.update();
+
+        let commands = app.world().get::<RocketCommands>(rocket).unwrap();
+        assert_eq!(
+            commands.throttle_cmd, 0.0,
+            "the circularization burn must wait for the apoapsis"
+        );
+        assert_eq!(
+            app.world().get::<RocketAutopilot>(rocket).unwrap().mode,
+            AutopilotMode::OrbitInsertion,
+            "waiting is not a phase change"
+        );
+    }
+
+    /// A trimmed orbit must coast instead of continuing to burn.
+    #[test]
+    fn insertion_stops_when_the_orbit_is_circular() {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let surface_m = earth.radius_km as f64 * 1_000.0;
+        let (position_m, velocity_mps) = insertion_state(
+            surface_m + 200_000.0,
+            surface_m + 200_000.0,
+            surface_m + 200_000.0,
+            0.0,
+        );
+        let mut app = insertion_app();
+        let rocket = spawn_insertion_rocket(&mut app, position_m, velocity_mps, false);
+        app.update();
+
+        let commands = app.world().get::<RocketCommands>(rocket).unwrap();
+        assert_eq!(commands.throttle_cmd, 0.0, "a circular orbit needs no trim");
     }
 
     #[test]

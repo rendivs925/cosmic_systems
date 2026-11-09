@@ -133,12 +133,13 @@ AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
 GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
 
 Extension work is a separate scientific-correctness track, not remaining roadmap
-items. It is open and recorded in `docs/scientific_correctness_audit.md`: four
+items. It is open and recorded in `docs/scientific_correctness_audit.md`: five
 defects fixed (retro-propulsion applied to powered ascents; insertion targeting
 the geodetic instead of geocentric site latitude; inclination measured about the
 geometric pole instead of the rotation axis, which required re-recording
-`leo-insertion-safe`; and the Falcon 9 catalog's 5.4 g thrust-to-weight on
-legacy test masses, now public Block 5 masses at 1.41 g) and four audited items
-(frame handedness, aerodynamic axis naming, per-thruster RCS allocation, and the
-insertion law). The open blocker is the upper-stage relight for the insertion
-trim.
+`leo-insertion-safe`; the Falcon 9 catalog's 5.4 g thrust-to-weight on legacy
+test masses, now public Block 5 masses at 1.41 g; and an insertion trim that
+started before the apsis and consumed the upper stage's ignition budget without
+circularizing) and three audited items (frame handedness, aerodynamic axis
+naming, and per-thruster RCS allocation). A headless Falcon 9 flight now
+circularizes at 200.7 x 200.0 km.

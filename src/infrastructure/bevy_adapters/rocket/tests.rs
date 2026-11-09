@@ -2091,8 +2091,12 @@ mod ascent_pipeline_tests {
             let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
             query.single(world).unwrap()
         };
-        {
-            let world = unsafe_app.world_mut();
+        // Set the target state at the start of every fixed step: the pipeline
+        // is being used as a guidance harness here, not as an orbit propagator,
+        // and its default flight conditions decelerate a 200 km state within a
+        // single integration tick.
+        let set_unsafe_state = |app: &mut App, mode: AutopilotMode| {
+            let world = app.world_mut();
             let mut rocket = world.get_mut::<RocketPhysicsState>(unsafe_entity).unwrap();
             rocket.dynamics.position_m = position_m;
             rocket.dynamics.velocity_mps = circular_velocity_mps * 0.98;
@@ -2101,9 +2105,11 @@ mod ascent_pipeline_tests {
             world
                 .get_mut::<RocketAutopilot>(unsafe_entity)
                 .unwrap()
-                .mode = AutopilotMode::Ascent;
-        }
+                .mode = mode;
+        };
+        set_unsafe_state(&mut unsafe_app, AutopilotMode::Ascent);
         unsafe_app.update();
+        set_unsafe_state(&mut unsafe_app, AutopilotMode::Ascent);
         unsafe_app.update();
         assert_ne!(
             *unsafe_app
@@ -2113,6 +2119,11 @@ mod ascent_pipeline_tests {
             RocketMissionState::Orbit,
             "an unsafe periapsis must not complete ascent"
         );
+        // The apoapsis-targeted cutoff hands this state to the insertion law on
+        // the same tick; the circularization burn starts on the next step. Either
+        // way the vehicle must keep thrusting rather than coast into impact.
+        set_unsafe_state(&mut unsafe_app, AutopilotMode::OrbitInsertion);
+        unsafe_app.update();
         assert!(
             unsafe_app
                 .world()
@@ -2120,7 +2131,7 @@ mod ascent_pipeline_tests {
                 .unwrap()
                 .throttle_cmd
                 > 0.0,
-            "an unsafe periapsis must remain under ascent thrust rather than coasting into impact"
+            "an unsafe periapsis must remain under thrust rather than coasting into impact"
         );
     }
 
