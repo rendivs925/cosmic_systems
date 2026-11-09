@@ -42,9 +42,9 @@ thrust.
 a new pure-domain predicate in `src/domain/services/entry_physics.rs`. The
 adapter now builds the thrust in the inertial frame
 (`orientation * stage_thrust_body(..)`) and applies the correlation only when
-`thrust · v_air_relative < 0`. An ascending burn, a descending thrusting flight
-and a plume perpendicular to the flow all keep multiplier 1.0; a landing or
-retro burn applies the correlation as before.
+`thrust · v_air_relative < 0`. An ascending burn, a thrusting dive, and a plume
+perpendicular to the flow all keep multiplier 1.0; a retro or landing burn
+applies the correlation as before.
 
 **Tests.**
 - Domain: five cases on the predicate (ascent, retro burn, perpendicular,
@@ -56,7 +56,8 @@ retro burn applies the correlation as before.
 **Baselines unchanged.** The three committed flight-parameter baselines run a
 minimal harness that never inserts `EntryPhysicsConfig` or
 `RetroPropulsionEffect`, so neither the old nor the new multiplier was part of
-those recordings. The full suite confirms they still match byte for byte.
+those recordings. Those regression tests still pass without regenerating a
+baseline.
 
 **Residuals.**
 - No runtime flight measurement is possible in this session (rocket mode leaves
