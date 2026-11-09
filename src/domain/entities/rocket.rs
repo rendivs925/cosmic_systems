@@ -264,10 +264,11 @@ impl Rocket {
     /// Hardcoded test fixture. The RON catalog is the runtime vehicle authority.
     #[cfg(test)]
     pub fn falcon9_test_fixture() -> Self {
-        // Two-stage Falcon 9 preserving the original aggregate Falcon-9
-        // parameters: 22 200 kg dry, 120 000 kg propellant, 7 607 kN total
-        // first-stage thrust, 282/311 s ISP, 5° gimbal, 3.7 m diameter,
-        // 70 m height.
+        // Two-stage Falcon 9 at public Block 5 figures: 29 600 kg dry,
+        // 518 000 kg propellant, 7 607 kN total first-stage thrust, 282/311 s
+        // ISP, 981 kN Merlin Vacuum at 348 s, 5° gimbal, 3.7 m diameter,
+        // 70 m height. Kept field-equivalent to `assets/configs/rockets/
+        // falcon9.ron` by `falcon9_ron_matches_hardcoded_domain_model`.
         let stage1_engines = (0..9)
             .map(|i| {
                 let angle = i as f32 * 2.0 * std::f32::consts::PI / 9.0;
@@ -297,14 +298,14 @@ impl Rocket {
                     name: "Falcon 9 Stage 1".to_string(),
                     diameter_m: 3.7,
                     height_m: 41.2,
-                    dry_mass_kg: 18_000.0,
-                    propellant_mass_kg: 90_000.0,
+                    dry_mass_kg: 25_600.0,
+                    propellant_mass_kg: 411_000.0,
                     recovery_propellant_reserve_kg: Some(15_000.0),
                     landing_gear: Some(LandingGearSpec {
                         count: 4,
                         base_radius_m: 4.5,
                         stroke_m: 3.0,
-                        max_landing_mass_kg: Some(30_000.0),
+                        max_landing_mass_kg: Some(45_000.0),
                         deploy_altitude_m: 100.0,
                     }),
                     fairing_dry_mass_kg: None,
@@ -314,22 +315,22 @@ impl Rocket {
                     name: "Falcon 9 Stage 2".to_string(),
                     diameter_m: 3.7,
                     height_m: 13.2,
-                    dry_mass_kg: 4_200.0,
-                    propellant_mass_kg: 30_000.0,
+                    dry_mass_kg: 4_000.0,
+                    propellant_mass_kg: 107_000.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
-                    fairing_dry_mass_kg: None,
+                    fairing_dry_mass_kg: Some(1_900.0),
                     engines: vec![RocketEngine {
                         position_m: Vec3::new(0.0, -6.6, 0.0),
                         thrust_axis: Vec3::Y,
                         isp_sea_level: 311.0,
                         isp_vacuum: 348.0,
                         gimbal_range_deg: 5.0,
-                        rated_thrust_kn: 934.0,
+                        rated_thrust_kn: 981.0,
                         thrust_reference: ThrustReference::Vacuum,
                         throttle_min: 0.0,
                         throttle_max: 1.0,
-                        max_ignitions: 2,
+                        max_ignitions: 3,
                         ignition_count: 1,
                         state: EngineState::Running,
                     }],
@@ -371,9 +372,9 @@ mod tests {
         assert_eq!(rocket.stages.len(), 2);
         assert!(rocket.stages[0].landing_gear.is_some());
         assert!(rocket.stages[1].landing_gear.is_none());
-        assert!((rocket.total_dry_mass_kg() - 22_200.0).abs() < 1.0);
-        assert!((rocket.total_propellant_mass_kg() - 120_000.0).abs() < 1.0);
-        assert!((rocket.total_mass_kg() - 142_200.0).abs() < 1.0);
+        assert!((rocket.total_dry_mass_kg() - 29_600.0).abs() < 1.0);
+        assert!((rocket.total_propellant_mass_kg() - 518_000.0).abs() < 1.0);
+        assert!((rocket.total_mass_kg() - 547_600.0).abs() < 1.0);
         let rated_thrust_kn: f32 = rocket.stages[0]
             .engines
             .iter()

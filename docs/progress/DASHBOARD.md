@@ -133,10 +133,12 @@ AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
 GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
 
 Extension work is a separate scientific-correctness track, not remaining roadmap
-items. It is open and recorded in `docs/scientific_correctness_audit.md`: three
+items. It is open and recorded in `docs/scientific_correctness_audit.md`: four
 defects fixed (retro-propulsion applied to powered ascents; insertion targeting
 the geodetic instead of geocentric site latitude; inclination measured about the
 geometric pole instead of the rotation axis, which required re-recording
-`leo-insertion-safe`) and five audited items (frame handedness, aerodynamic axis
-naming, per-thruster RCS allocation, closed-loop insertion, Falcon 9
-provenance).
+`leo-insertion-safe`; and the Falcon 9 catalog's 5.4 g thrust-to-weight on
+legacy test masses, now public Block 5 masses at 1.41 g) and four audited items
+(frame handedness, aerodynamic axis naming, per-thruster RCS allocation, and the
+insertion law). The open blocker is the upper-stage relight for the insertion
+trim.

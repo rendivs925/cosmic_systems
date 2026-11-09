@@ -193,10 +193,10 @@ mod tests {
         }
 
         // Aggregate pins (same assertions as the hardcoded entity tests):
-        // 22.2 t dry, 120 t propellant, 142.2 t gross, 7 607 kN liftoff.
-        assert!((loaded.total_dry_mass_kg() - 22_200.0).abs() < 1.0);
-        assert!((loaded.total_propellant_mass_kg() - 120_000.0).abs() < 1.0);
-        assert!((loaded.total_mass_kg() - 142_200.0).abs() < 1.0);
+        // 29.6 t dry, 518 t propellant, 547.6 t gross, 7 607 kN liftoff.
+        assert!((loaded.total_dry_mass_kg() - 29_600.0).abs() < 1.0);
+        assert!((loaded.total_propellant_mass_kg() - 518_000.0).abs() < 1.0);
+        assert!((loaded.total_mass_kg() - 547_600.0).abs() < 1.0);
         let rated_thrust_kn: f32 = loaded.stages[0]
             .engines
             .iter()
@@ -229,13 +229,13 @@ mod tests {
         assert_eq!(legs.count, 4);
         assert!((legs.base_radius_m - 4.5).abs() < 1e-6);
         assert!((legs.stroke_m - 3.0).abs() < 1e-6);
-        assert_eq!(legs.max_landing_mass_kg, Some(30_000.0));
+        assert_eq!(legs.max_landing_mass_kg, Some(45_000.0));
         assert!((legs.deploy_altitude_m - 100.0).abs() < 1e-6);
     }
 
     #[test]
     fn shipped_fairings_belong_only_to_final_serial_stages() {
-        for (file, expected_mass_kg) in [(FALCON9_RON, 1_750.0), ("electron.ron", 50.0)] {
+        for (file, expected_mass_kg) in [(FALCON9_RON, 1_900.0), ("electron.ron", 50.0)] {
             let loaded = load_shipped(file);
             assert!(loaded
                 .rocket

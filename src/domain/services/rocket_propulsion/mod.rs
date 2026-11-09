@@ -161,7 +161,7 @@ mod tests {
     }
 
     /// Regression pin: pad thrust-to-weight of the stock Falcon 9 must stay at
-    /// ≈ 5.45 so ascent guidance assumptions remain valid.
+    /// ≈ 1.42, the Block 5 value, so ascent guidance assumptions remain valid.
     #[test]
     fn falcon9_pad_thrust_to_weight_ratio() {
         let rocket = Rocket::falcon9_test_fixture();
@@ -171,8 +171,8 @@ mod tests {
         let weight_n = rocket.total_mass_kg() as f64 * STANDARD_GRAVITY_MPS2;
         let tw_ratio = thrust_n / weight_n;
         assert!(
-            (tw_ratio - 5.45).abs() < 0.05,
-            "pad T/W {tw_ratio} drifted from 5.45"
+            (tw_ratio - 1.42).abs() < 0.05,
+            "pad T/W {tw_ratio} drifted from 1.42"
         );
     }
 
@@ -189,15 +189,20 @@ mod tests {
         // Closed form, one Tsiolkovsky term per stage (vacuum ISP).
         let isp1 = stage1.engines[0].isp_vacuum as f64;
         let isp2 = stage2.engines[0].isp_vacuum as f64;
-        let m_full = rocket.total_mass_kg() as f64;
+        // The catalog carries no separate payload mass; the fairing is the
+        // only attached mass, and it rides both the stage-2 start and final
+        // masses. Without it the stage-2 ratio is unrealistic.
+        let payload_kg = stage2.fairing_dry_mass_kg.unwrap_or(0.0) as f64;
+        let m_full = rocket.total_mass_kg() as f64 + payload_kg;
         let m_after_stage1_burn = m_full - stage1.propellant_mass_kg as f64;
         let dv1 = isp1 * g0 * (m_full / m_after_stage1_burn).ln();
-        let m_stage2_start = stage2.total_mass_kg() as f64;
-        let dv2 = isp2 * g0 * (m_stage2_start / stage2.dry_mass_kg as f64).ln();
+        let m_stage2_start = stage2.total_mass_kg() as f64 + payload_kg;
+        let m_stage2_dry = stage2.dry_mass_kg as f64 + payload_kg;
+        let dv2 = isp2 * g0 * (m_stage2_start / m_stage2_dry).ln();
         let closed_form_dv = dv1 + dv2;
         assert!(
-            (closed_form_dv - 10_000.0).abs() < 600.0,
-            "two-stage budget {closed_form_dv} m/s is not ≈ 10 km/s"
+            (closed_form_dv - 14_300.0).abs() < 600.0,
+            "two-stage budget {closed_form_dv} m/s is not ≈ 14.3 km/s"
         );
 
         // Step integration: burn stage 1, shed its dry structure, burn stage 2.
@@ -212,8 +217,12 @@ mod tests {
             // Mass floor during this burn: everything still attached after
             // the propellant is gone (this stage dry + upper stages).
             let mass_floor = match next_stage {
-                Some(next) => stage.dry_mass_kg as f64 + next.total_mass_kg() as f64,
-                None => stage.dry_mass_kg as f64,
+                Some(next) => {
+                    stage.dry_mass_kg as f64
+                        + next.total_mass_kg() as f64
+                        + next.fairing_dry_mass_kg.unwrap_or(0.0) as f64
+                }
+                None => stage.dry_mass_kg as f64 + payload_kg,
             };
             for _ in 0..steps {
                 velocity += (thrust_n / mass) * dt;
@@ -437,8 +446,8 @@ mod tests {
         let rocket = Rocket::falcon9_test_fixture();
         let upper_properties = stage_mass_properties(&rocket.stages[1], 20_000.0, 1_000.0, 0.0);
         let spent_properties = stage_mass_properties(&rocket.stages[0], 15_000.0, 0.0, 0.0);
-        assert_eq!(upper_properties.mass_kg, 25_200.0);
-        assert_eq!(spent_properties.mass_kg, 33_000.0);
+        assert_eq!(upper_properties.mass_kg, 25_000.0);
+        assert_eq!(spent_properties.mass_kg, 40_600.0);
         let pre_mass_kg = upper_properties.mass_kg + spent_properties.mass_kg;
         let (pre_inertia, pre_com) = rocket_inertia_tensor(pre_mass_kg, 0.0, 1.85, 54.4);
         let orientation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_4);
@@ -731,10 +740,10 @@ mod tests {
     #[test]
     fn payload_mass_rides_with_active_vehicle_mass() {
         let rocket = Rocket::falcon9_test_fixture();
-        let propellant = vec![90_000.0_f32, 30_000.0];
+        let propellant = vec![411_000.0_f32, 107_000.0];
         assert_eq!(
             active_vehicle_mass_with_payload(&rocket.stages, &propellant, 0, 1_900.0),
-            142_200.0 + 1_900.0
+            547_600.0 + 1_900.0
         );
         // Zero payload matches plain active_vehicle_mass.
         assert_eq!(
@@ -746,7 +755,7 @@ mod tests {
     #[test]
     fn serial_only_mass_and_inertia_are_unchanged_without_parallel_boosters() {
         let rocket = Rocket::falcon9_test_fixture();
-        let propellant = vec![90_000.0_f32, 30_000.0];
+        let propellant = vec![411_000.0_f32, 107_000.0];
         let serial_mass = active_vehicle_mass_with_payload(&rocket.stages, &propellant, 0, 100.0);
         let extended_mass = active_vehicle_mass_with_payload_and_boosters(
             &rocket.stages,
@@ -841,7 +850,7 @@ mod tests {
         let rocket = Rocket::falcon9_test_fixture();
         let (inertia, com) = active_vehicle_inertia(
             &rocket.stages,
-            &[90_000.0, 30_000.0],
+            &[411_000.0, 107_000.0],
             0,
             0.0,
             0.0,
@@ -856,10 +865,10 @@ mod tests {
             inertia,
             com,
         );
-        assert!((state.mass_kg - 142_200.0).abs() < 1.0);
+        assert!((state.mass_kg - 547_600.0).abs() < 1.0);
         // After burning ~5 s at a high mass flow the mass drops accordingly.
-        let consumption = consume_propellant(90_000.0, 2_500.0, 5.0);
+        let consumption = consume_propellant(411_000.0, 2_500.0, 5.0);
         state.mass_kg -= consumption.consumed_kg as f64;
-        assert!((state.mass_kg - (142_200.0 - 12_500.0)).abs() < 1.0);
+        assert!((state.mass_kg - (547_600.0 - 12_500.0)).abs() < 1.0);
     }
 }

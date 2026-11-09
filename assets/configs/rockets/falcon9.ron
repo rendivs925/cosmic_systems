@@ -1,21 +1,29 @@
 // Falcon 9 (Block 5) - two-stage kerolox medium-lift vehicle.
 //
-// Numbers are chosen to match the hardcoded test fixture
-// (`domain/entities/rocket.rs :: Rocket::falcon9_test_fixture()`), which pins the original
-// simulator aggregates: 22.2 t dry (18.0 t stage 1 + 4.2 t stage 2),
-// 120.0 t propellant (90.0 t + 30.0 t), 7 607 kN liftoff thrust across nine
-// Merlin 1D engines, ISP 282 s (SL) / 311 s (vac), 5 deg TVC gimbal, 3.7 m
-// core diameter; stage lengths 41.2 m / 13.2 m within the 70 m stack. Engine
-// stations are representative stage-local values: nine engines on a 1.2 m
-// octaweb ring at the stage-1 lower cylinder end (y = -20.6 m), and one
-// Merlin Vacuum at the stage-2 lower cylinder end (y = -6.6 m).
-// ISP 311 s (SL) / 348 s (vac).
+// Public Block 5 figures, kept internally coherent:
+//   - liftoff mass ~549.5 t: stage 1 dry 25.6 t + 411.0 t propellant,
+//     stage 2 dry 4.0 t + 107.0 t propellant, fairing 1.9 t
+//   - 7 607 kN liftoff thrust across nine Merlin 1D engines (845.2 kN each),
+//     ISP 282 s (SL) / 311 s (vac), 5 deg TVC gimbal
+//   - one Merlin Vacuum, 981 kN, ISP 348 s (vac)
+//   - 3.7 m core diameter; stage lengths 41.2 m / 13.2 m within the 70 m stack
 //
-// Sources (rough public figures): SpaceX Falcon 9 User Guide (2018-2021),
-// SpaceX press materials; per-engine thrust derived from the 7 607 kN
-// aggregate retained by the simulator. Ignition budgets below are conservative
-// catalog assumptions for this simulator, not asserted operational limits.
-// The dated source byte is not yet pinned, so no checksum is claimed.
+// The previous definition kept the 7 607 kN aggregate but only 120 t of
+// propellant, which made the vehicle 5.4 g at liftoff and unable to follow any
+// realistic gravity turn. The controller's PID gains are normalized to a
+// ~549 t reference, so this restores the mass the attitude loop was designed
+// for.
+//
+// Engine stations are representative stage-local values: nine engines on a
+// 1.2 m octaweb ring at the stage-1 lower cylinder end (y = -20.6 m), and one
+// Merlin Vacuum at the stage-2 lower cylinder end (y = -6.6 m).
+//
+// Sources: SpaceX Falcon 9 public vehicle figures (liftoff mass, propellant
+// loads, Merlin thrust/ISP, Merlin Vacuum thrust/ISP) as published in the
+// Falcon 9 Payload User's Guide era (2018-2021) and SpaceX vehicle pages.
+// Ignition budgets, the 15 t recovery reserve and the landing-leg mass limit
+// are conservative simulator assumptions, not asserted operational limits. The
+// dated source byte is not pinned, so no checksum is claimed.
 
 (
     vehicles: [
@@ -28,7 +36,7 @@
                     title: "Falcon 9 Payload User's Guide",
                     source_url: "https://www.spacex.com/vehicles/falcon-9/",
                 ),
-                representative_rationale: "The retained simulator fixture and rough public figures include representative mass splits, engine stations, ignition limits, and landing gear; the dated source byte is not yet pinned.",
+                representative_rationale: "Public Block 5 masses, propellant loads, and Merlin/Merlin Vacuum thrust and ISP; engine stations, ignition budgets, recovery reserve, and landing-gear limits are simulator-representative. The dated source byte is not pinned.",
             ),
             diameter_m: 3.7,
             height_m: 70.0,
@@ -41,8 +49,8 @@
                     basis: Representative,
                     diameter_m: 3.7,
                     height_m: 41.2,
-                    dry_mass_kg: 18_000.0,
-                    propellant_mass_kg: 90_000.0,
+                    dry_mass_kg: 25_600.0,
+                    propellant_mass_kg: 411_000.0,
                     recovery_propellant_reserve_kg: Some(15_000.0),
                     // Falcon 9's deployable legs are Stage 1 recovery hardware.
                     landing_legs: (
@@ -50,7 +58,7 @@
                         count: 4,
                         base_radius_m: 4.5,
                         stroke_m: 3.0,
-                        max_landing_mass_kg: 30_000.0,
+                        max_landing_mass_kg: 45_000.0,
                         deploy_altitude_m: 100.0,
                     ),
                     engines: (
@@ -154,11 +162,11 @@
                     basis: Representative,
                     diameter_m: 3.7,
                     height_m: 13.2,
-                    dry_mass_kg: 4_200.0,
-                    propellant_mass_kg: 30_000.0,
+                    dry_mass_kg: 4_000.0,
+                    propellant_mass_kg: 107_000.0,
                     fairing: (
                         basis: Representative,
-                        dry_mass_kg: 1_750.0,
+                        dry_mass_kg: 1_900.0,
                     ),
                     engines: (
                         basis: Representative,
@@ -170,9 +178,12 @@
                             isp_sl: 311.0,
                             isp_vac: 348.0,
                             gimbal_range_deg: 5.0,
-                            rated_thrust_n: 934_000.0,
+                            rated_thrust_n: 981_000.0,
                             thrust_reference: Vacuum,
-                            max_ignitions: 2,
+                            // The upper stage relights for insertion and any
+                            // trim burn; the ascent start plus the post-staging
+                            // restart already consume two.
+                            max_ignitions: 3,
                         ),
                         ],
                     ),

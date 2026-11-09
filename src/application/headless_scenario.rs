@@ -221,6 +221,10 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
 
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
+    // The headless runner is a diagnostic tool: guidance and lifecycle edges
+    // are the only way to see why a burn ended, and the fixed simulation does
+    // not otherwise install a logger.
+    app.add_plugins(bevy::log::LogPlugin::default());
     app.insert_resource(SimulationTime::new(DEFAULT_FIXED_TIMESTEP_S));
     app.insert_resource(catalog);
     app.insert_resource(selection);

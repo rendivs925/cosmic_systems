@@ -138,13 +138,16 @@ trench corner, hardstand/trench geometry that does not scale with very small
 vehicles, faceted crowns at extreme close range, and sparse vegetation at 600 m.
 
 A separate scientific-correctness track has been opened and is recorded in
-`docs/scientific_correctness_audit.md`. It found and fixed three defects — the
+`docs/scientific_correctness_audit.md`. It found and fixed four defects — the
 retro-propulsion correlation being applied to powered ascents, orbit insertion
-targeting the WGS-84 geodetic latitude instead of the geocentric one, and
-orbital inclination being measured about the geometric pole instead of the
-rotation axis — and records five further audited items: handedness (which led to
-the third defect), aerodynamic axis naming, per-thruster RCS allocation, the
-insertion law, and Falcon 9 provenance. None of those closes a roadmap task.
+targeting the WGS-84 geodetic latitude instead of the geocentric one, orbital
+inclination being measured about the geometric pole instead of the rotation
+axis, and the Falcon 9 catalog carrying 5.4 g of thrust-to-weight on legacy test
+masses (now public Block 5 masses, 1.41 g) — and records four further audited
+items: handedness (which led to the third defect), aerodynamic axis naming,
+per-thruster RCS allocation, and the insertion law. Falcon 9 insertion now
+reaches a stable orbit with propellant left but does not relight for the trim;
+that remains the top open item. None of this closes a roadmap task.
 
 ## How do we know it works?
 

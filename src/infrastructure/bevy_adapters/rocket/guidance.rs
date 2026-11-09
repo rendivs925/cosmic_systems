@@ -21,6 +21,36 @@ use bevy::ecs::query::QueryData;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// Insertion burns stop 1 km short of the target apsis. The acceptance
+/// predicate keeps its wider 25 km band; this deadband is what the burn law
+/// aims at, so a trimmed orbit satisfies the predicate rather than a burn that
+/// coasted to a stop 24 km below the target.
+const INSERTION_DEADBAND_M: f64 = 1_000.0;
+
+/// Minimum altitude for the energy cutoff that ends the ascent burn.
+const INSERTION_MIN_ALTITUDE_M: f64 = 130_000.0;
+
+/// Altitude above which ascent replaces the open-loop pitch ramp with a
+/// radial-velocity-nulling tilt about the local horizontal.
+const RADIAL_NULL_ALTITUDE_M: f64 = 80_000.0;
+
+/// Time constant used to turn the remaining altitude into a radial-velocity
+/// setpoint above [`RADIAL_NULL_ALTITUDE_M`], seconds.
+const RADIAL_ARRIVAL_TIME_S: f64 = 30.0;
+
+/// Bounds on that radial-velocity setpoint, m/s. Negative values are allowed so
+/// an overshooting ascent is steered back down instead of only coasting.
+const RADIAL_RATE_MIN_MPS: f64 = -50.0;
+const RADIAL_RATE_MAX_MPS: f64 = 250.0;
+
+/// Thrust tilt per m/s of radial-velocity error, and its cap (≈19°). The cap
+/// keeps the command a trim on a mostly horizontal burn, not a pitch-over.
+const RADIAL_NULL_GAIN: f64 = 1.0 / 1_500.0;
+const RADIAL_TILT_LIMIT: f64 = 0.35;
+
+/// Distance from apoapsis inside which the circularization burn is allowed.
+const NEAR_APSIS_BAND_M: f64 = 5_000.0;
+
 /// Guidance can command an engine start, so it uses the stage's available
 /// thrust envelope rather than the currently running engine set. The active
 /// core capability still enforces synchronized inventory and recovery reserve.
@@ -112,6 +142,7 @@ pub fn guidance_system(
         let mission_state = &mut *access.mission_state;
         let autopilot = &mut *access.autopilot;
         let commands = &mut *access.commands;
+        let previous_autopilot_mode = autopilot.mode;
 
         // Guidance owns throttle targets. Preserve the established phase
         // defaults for modes that do not need a specialized burn law.
@@ -307,12 +338,46 @@ pub fn guidance_system(
                 };
                 commands.throttle_cmd = 1.0;
 
-                // Do not coast merely because apoapsis is high enough. A
-                // suborbital state can satisfy that condition while retaining
-                // an Earth-intersecting periapsis, leaving the upper stage in
-                // Ascent with zero throttle until it impacts. The shared orbit
-                // predicate validates both apsides and the target plane.
-                if target_orbit_reached {
+                // Above the sensible atmosphere the fixed pitch ramp keeps
+                // adding radial velocity after the vehicle is already near
+                // orbital altitude, so the apoapsis runs away while the
+                // periapsis stays low. Command a bounded tilt about the
+                // horizontal that tracks a radial-velocity setpoint: positive
+                // while still climbing to the target altitude, zero at the
+                // target, negative when the vehicle is above or falling.
+                // Below the gate altitude the schedule is untouched, so the
+                // tower-clearance and gravity-turn baselines are unaffected.
+                if autopilot.ascent_pitch_over_engaged && altitude_m >= RADIAL_NULL_ALTITUDE_M {
+                    let radial_mps = vertical_speed_mps;
+                    let horizontal_mps = (inertial_velocity_mps - up_dir * radial_mps).length();
+                    if inertial_velocity_mps.length() > 1.0 && horizontal_mps > 1.0 {
+                        let target_radial_mps =
+                            ((autopilot.target_orbit.target_apoapsis_altitude_m - altitude_m)
+                                / RADIAL_ARRIVAL_TIME_S)
+                                .clamp(RADIAL_RATE_MIN_MPS, RADIAL_RATE_MAX_MPS);
+                        let tilt = ((target_radial_mps - radial_mps) * RADIAL_NULL_GAIN)
+                            .clamp(-RADIAL_TILT_LIMIT, RADIAL_TILT_LIMIT);
+                        let horizontal_dir =
+                            (inertial_velocity_mps - up_dir * radial_mps).normalize();
+                        commands.target_attitude =
+                            attitude_from_direction((horizontal_dir + up_dir * tilt).normalize());
+                    }
+                }
+
+                // Cut on orbital energy, not on an apsis. A burn near the
+                // periapsis raises the apoapsis first, so waiting for the
+                // periapsis to reach the target burns far past the energy of
+                // the target orbit and ends on a hyperbolic arc. The target
+                // circular orbit has semi-major axis = target radius; the
+                // altitude gate keeps a steep early trajectory from ending the
+                // burn before the vehicle is above the atmosphere.
+                let target_semi_major_m =
+                    radius_m + autopilot.target_orbit.target_apoapsis_altitude_m;
+                let energy_reached = state_elements.semi_major_axis_m.is_finite()
+                    && state_elements.semi_major_axis_m
+                        >= target_semi_major_m - INSERTION_DEADBAND_M;
+                let above_atmosphere = altitude_m >= INSERTION_MIN_ALTITUDE_M;
+                if target_orbit_reached || (energy_reached && above_atmosphere) {
                     autopilot.mode = AutopilotMode::OrbitInsertion;
                     commands.throttle_cmd = 0.0;
                 }
@@ -355,21 +420,41 @@ pub fn guidance_system(
                 }
             }
             AutopilotMode::OrbitInsertion => {
-                if state_elements.apoapsis_m
-                    < radius_m + autopilot.target_orbit.target_apoapsis_altitude_m
-                        - autopilot.target_orbit.altitude_tolerance_m
-                {
-                    // Raise the apoapsis until the insertion coast can begin.
+                let target_apoapsis_m =
+                    radius_m + autopilot.target_orbit.target_apoapsis_altitude_m;
+                let target_periapsis_m =
+                    radius_m + autopilot.target_orbit.target_periapsis_altitude_m;
+                // Two burns, one axis at a time: first give the ellipse the
+                // right apoapsis, then raise the periapsis to the target. Both
+                // cut on a 1 km deadband rather than on the 25 km acceptance
+                // tolerance, so the predicate confirms a trimmed orbit instead
+                // of accepting a burn that stopped early.
+                // Periapsis can only be raised efficiently near apoapsis and
+                // apoapsis lowered near periapsis, so each burn waits for its
+                // own apsis. Firing the retro trim anywhere would lower the
+                // periapsis into the atmosphere and deorbit the vehicle.
+                let near_apoapsis = state_elements.apoapsis_m - radius <= NEAR_APSIS_BAND_M;
+                let near_periapsis = radius - state_elements.periapsis_m <= NEAR_APSIS_BAND_M;
+                let raise_apoapsis =
+                    state_elements.apoapsis_m < target_apoapsis_m - INSERTION_DEADBAND_M;
+                let raise_periapsis = near_apoapsis
+                    && state_elements.periapsis_m < target_periapsis_m - INSERTION_DEADBAND_M;
+                if raise_apoapsis || raise_periapsis {
                     commands.target_attitude = prograde_attitude(inertial_velocity_mps);
                     commands.throttle_cmd = 1.0;
+                } else if near_periapsis
+                    && state_elements.apoapsis_m
+                        > target_apoapsis_m + autopilot.target_orbit.altitude_tolerance_m
+                {
+                    // Overshoot trim: burn retrograde at periapsis until the
+                    // apoapsis is back inside the tolerance band.
+                    commands.target_attitude = attitude_from_direction(
+                        -inertial_velocity_mps / inertial_velocity_mps.length().max(1e-6),
+                    );
+                    commands.throttle_cmd = 1.0;
                 } else {
-                    // Coast to apoapsis, then circularize only near the target
-                    // altitude instead of accepting an arbitrary low-e orbit.
                     commands.target_attitude = prograde_attitude(inertial_velocity_mps);
-                    let near_target_apoapsis = inertial_velocity_mps.dot(up_dir).abs() <= 25.0
-                        && (altitude_m - autopilot.target_orbit.target_apoapsis_altitude_m).abs()
-                            <= autopilot.target_orbit.altitude_tolerance_m;
-                    commands.throttle_cmd = if near_target_apoapsis { 1.0 } else { 0.0 };
+                    commands.throttle_cmd = 0.0;
                 }
             }
             AutopilotMode::Deorbit => {
@@ -578,6 +663,23 @@ pub fn guidance_system(
                 range_errors.crossrange_m,
             );
             commands.target_attitude = banked_attitude_from_direction(up_dir, bank_angle);
+        }
+
+        // Autopilot-mode edges are what insertion diagnosis needs: the mission
+        // state alone does not say whether the burn was cut by the periapsis
+        // criterion, by acceptance, or by fuel exhaustion.
+        if autopilot.mode != previous_autopilot_mode {
+            info!(
+                target: "rocket_guidance",
+                from = ?previous_autopilot_mode,
+                to = ?autopilot.mode,
+                altitude_km = altitude_m / 1000.0,
+                speed_mps = inertial_velocity_mps.length(),
+                apoapsis_km = (state_elements.apoapsis_m - radius_m) / 1000.0,
+                periapsis_km = (state_elements.periapsis_m - radius_m) / 1000.0,
+                throttle = commands.throttle_cmd,
+                "autopilot mode change"
+            );
         }
     }
 }

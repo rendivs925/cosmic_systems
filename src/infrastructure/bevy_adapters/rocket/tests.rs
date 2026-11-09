@@ -2479,7 +2479,7 @@ mod ascent_pipeline_tests {
             propulsion.vehicle.stages[0].landing_gear,
             Some(expected_gear)
         );
-        assert!((physics.dynamics.mass_kg - 33_000.0).abs() < 1e-6);
+        assert!((physics.dynamics.mass_kg - 40_600.0).abs() < 1e-6);
         assert_eq!(propulsion.attached_payload_kg, 0.0);
         assert!(propulsion.vehicle.stages[0].fairing_dry_mass_kg.is_none());
         assert!(physics.dynamics.inertia_body.is_finite());

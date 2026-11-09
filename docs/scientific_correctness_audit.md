@@ -19,8 +19,8 @@ least one test, not runtime-verified flight.
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **PARTIAL — model self-consistent; two documentation defects** |
 | SC-04 | Per-thruster RCS allocation | **GAP — no thruster model; scalar per-axis clamp** |
-| SC-05 | Closed-loop orbit insertion | **PARTIAL — acceptance predicate and bang-bang burn only** |
-| SC-06 | Falcon 9 data provenance | **DECLARED REPRESENTATIVE — no pinned source byte** |
+| SC-05 | Closed-loop orbit insertion | **PARTIAL — energy cutoff and two-apse trim; relight blocked** |
+| SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
 | SC-08 | Orbital inclination measured from the geometric pole instead of the rotation axis | **DEFECT — fixed; one baseline regenerated** |
 
@@ -165,20 +165,53 @@ is no throttle cut targeted at the apoapsis, no eccentricity or plane-error
 correction law, and no post-insertion trim. A state that satisfies the tolerance
 is accepted even if it was reached by overshoot.
 
-## SC-06 — Falcon 9 provenance
+**2026-11-09 update after the mass fix (SC-06).** The ascent now ends on orbital
+energy instead of burning to depletion: it cuts at 137.8 km into a 292 × 106 km
+orbit (e = 0.014) with about 18 t of upper-stage propellant still aboard, where
+the old data ended on a hyperbolic arc with empty tanks. Insertion is still not
+complete, for two measured reasons:
 
-**As found.** Every catalog entry is `DataBasis::Representative`, and validation
-requires a non-blank `representative_rationale`. `falcon9.ron` states that the
-numbers derive from `Rocket::falcon9_test_fixture()`, are "rough public
-figures", and that "the dated source byte is not yet pinned, so no checksum is
-claimed". The recorded source URL is the vehicle marketing page rather than a
-dated document.
+1. The cutoff altitude is 62 km below the target. The stage reaches the target
+   semi-major axis before it reaches 200 km, so an energy-triggered cutoff is
+   still a compromise; a real ascent must shape the trajectory so both coincide
+   (a closed-loop ascent law, not just a cutoff).
+2. The insertion trim correctly commands the prograde burn near apoapsis, but
+   the upper-stage engine never ignites: the headless log shows
+   `trim commanded with no running engine stage=1 states=[(Off, 0, 3)]` with a
+   full ignition budget. `command_engine_lifecycle` leaves it `Off`. That
+   lifecycle defect is the next concrete blocker; until it is fixed the trim
+   cannot raise the periapsis and the orbit stays 292 × 106 km.
 
-**Verdict.** Correctly declared as representative; not a scientific authority.
+The trim law itself is now a two-apse law (raise the apoapsis with a prograde
+burn, raise the periapsis near apoapsis, lower an overshoot near periapsis). A
+first version without the periapsis guard retro-burned continuously and
+deorbited the vehicle; the guarded version holds a stable orbit.
 
-**Minor defect.** The file header lists the vacuum engine as "ISP 311 s (SL) /
-348 s (vac)". 311 s is the *sea-level-equivalent catalog value* for that engine,
-not a measured sea-level figure, and the label invites the wrong reading.
+## SC-06 — Falcon 9 data
+
+**Defect.** The shipped Falcon 9 combined the Block 5 *thrust* (7,607 kN) with
+the legacy fixture's masses (22.2 t dry, 120 t propellant). Liftoff mass was
+143,950 kg — **5.4 g** — while the attitude PID gains are documented as
+normalized to a ~549 t reference. At 5.4 g the 160 s gravity-turn program cannot
+turn the vehicle horizontal: it reached 7.4 km/s on an e = 0.31 arc with a
+negative periapsis, then burned to depletion.
+
+**Fix.** Public Block 5 figures, applied to the catalog and the hardcoded fixture
+together (the equivalence test enforces this, and the aggregate pins in the
+tests follow): stage 1 25.6 t dry + 411 t propellant, stage 2 4.0 t dry + 107 t
+propellant, fairing 1.9 t, 549.5 t liftoff; Merlin Vacuum 981 kN at 348 s. The
+upper stage ignition budget is 3 so an insertion relight is at least nominally
+possible. The entry remains `Representative`: public figures, no pinned source
+byte.
+
+**Measured.** Headless Starbase ascent: 549,500 kg at liftoff, T/W 1.41, stage
+separation at T+144.2 s shedding 40,600 kg and leaving 112,898 kg of upper
+stage. The three committed flight baselines use the Electron-like fixture, not
+the catalog, so they are unchanged.
+
+**Still open.** The source byte is not pinned, so this is not `SourceVerified`;
+and the representative trajectory means every number above is conditional on
+the assumptions listed in the file header.
 
 ## SC-07 — WGS-84 datum audit
 
@@ -270,14 +303,14 @@ not a frame issue.
 
 ## Next steps, in order of physical impact
 
-1. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
+1. **SC-05 — upper-stage relight.** The insertion trim is correct but the
+   engine stays `Off` with an unused ignition budget. Fix the lifecycle/ullage
+   interaction, then verify the trim raises the 106 km periapsis to the 200 km
+   target. After that, close the ascent loop so the energy cutoff and the target
+   altitude coincide instead of cutting 62 km low.
+2. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
    placement, failure, or propellant cost. This is the largest remaining gap in
    the attitude loop.
-2. **SC-05 — insertion law.** It is now the only reason a Falcon 9 ascent does
-   not reach `Orbit`: the vehicle over-burns to a 1,468 km, e=0.31 arc. Replace
-   bang-bang apoapsis chasing with a cutoff targeted at the apoapsis and a
-   post-insertion eccentricity/plane trim; the acceptance predicate can then
-   shrink below ±25 km and ±2°.
 3. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
@@ -303,4 +336,4 @@ the previous floor was 1,202 with `dem` and 1,150 without.
 | `cargo test --features dem --lib` | 1,209 passed, 2 ignored |
 | `cargo test --no-default-features --lib` | 1,157 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
-| headless Falcon 9 ascent | 120 s run reproduced bit-identically; plane 25.81° about the rotation axis; insertion still blocked by SC-05 |
+| headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut at 137.8 km into 292 x 106 km with propellant left; stable through 90 min; insertion relight blocked (SC-05) |

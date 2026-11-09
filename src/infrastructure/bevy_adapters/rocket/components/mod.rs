@@ -1248,7 +1248,7 @@ mod propulsion_tests {
             .all(|(stage, remaining)| *remaining == stage.propellant_mass_kg));
         assert_eq!(
             propulsion.attached_booster_inventory(),
-            Some(&[90_000.0][..])
+            Some(&[411_000.0][..])
         );
         assert!(all_engines_are_fresh(&propulsion.vehicle));
 
@@ -1282,7 +1282,7 @@ mod propulsion_tests {
         assert_eq!(propulsion.attached_payload_kg, 10.0);
         assert_eq!(
             propulsion.attached_booster_inventory(),
-            Some(&[90_000.0][..])
+            Some(&[411_000.0][..])
         );
         assert!(all_engines_are_fresh(&propulsion.vehicle));
     }
@@ -1296,7 +1296,7 @@ mod propulsion_tests {
         ));
         let mut attachment = BoosterAttachmentState::fresh_for(&vehicle);
 
-        assert_eq!(attachment.remaining_kg(), Some(&[90_000.0, 90_000.0][..]));
+        assert_eq!(attachment.remaining_kg(), Some(&[411_000.0, 411_000.0][..]));
         assert!(attachment.is_attached());
         attachment.detach();
 
