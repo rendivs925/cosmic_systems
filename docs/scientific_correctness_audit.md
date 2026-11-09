@@ -73,9 +73,9 @@ those recordings. The full suite confirms they still match byte for byte.
 **Design as found.** Three improper maps are deliberate and tested:
 `icrf_j2000_to_solar_inertial` has determinant −1 and maps `x × y = −z`
 (`icrf_to_solar_inertial_is_an_improper_transform`); the terrain↔IAU axis swap
-`(x, z, y)` is likewise improper (`terrain_axes_cross_the_explicit_iau_boundary`);
-the IAU orientation between them is proper. The composition is therefore a
-proper rotation, which the comment on
+`(x, z, y)` is an odd permutation, hence also improper (its round trip is
+tested); the IAU orientation between them is proper. The composition is
+therefore a proper rotation, which the comment on
 `body_fixed_to_planet_inertial_rotation` states explicitly.
 
 Pseudovectors that cross a reflection are negated at the crossing:
@@ -197,6 +197,24 @@ launch stand uses the terrain surface normal), and changing it would move every
 local-tangent consumer, so it is recorded rather than changed.
 
 ---
+
+## Next steps, in order of physical impact
+
+1. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
+   placement, failure, or propellant cost. This is the largest remaining gap in
+   the attitude loop.
+2. **SC-05 — insertion law.** Replace bang-bang apoapsis chasing with a
+   cutoff targeted at the apoapsis and a post-insertion eccentricity/plane trim;
+   the acceptance predicate can then shrink below ±25 km and ±2°.
+3. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
+   explicitly dated snapshot) with a checksum, then promote the entry to
+   `SourceVerified`, or state that the vehicle is permanently representative.
+4. **SC-03 — define the body lateral axes** in one place, then name the
+   aerodynamic coefficients from that definition and correct the static-margin
+   comment.
+5. **Runtime verification of SC-01 and SC-07** once the session can inject a
+   launch key: an ascent recording should show full thrust above Mach 1.2 and a
+   target inclination equal to the geocentric site latitude.
 
 ## Validation
 
