@@ -46,7 +46,7 @@ over with a new duplicate spec.
 | RD-01 invalidation | `terrain-rendering`, `terrain-lod` | — | archived `2026-11-08-resource-invalidation-audit` | every per-frame system classified; the vegetation uniform no longer rewrites unchanged inputs |
 | RD-02 streaming measurement | `terrain-lod`, `terrain-rendering` | — | culling, LOD reconcile and the upload burst are timed separately; GPU upload completion is still unexposed and not claimed |
 | RD-03 shadow lifecycle | `terrain-lighting-occlusion` | — | |
-| VL-01 smoke | `scientific-validation` | — | |
+| VL-01 smoke | `scientific-validation` | — | three modes exit 124 with zero hard errors; one windowed frame per mode |
 | VL-02 spec validation | — | — | process check; 43/43 strict |
 | VL-03 visual suite | `scientific-validation` | — | archived `2026-11-08-visual-acceptance-suite` | manifest + script; all ten scenes pass, with `orbit` labelled as an orbital-altitude viewpoint |
 

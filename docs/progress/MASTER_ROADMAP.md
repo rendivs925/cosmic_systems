@@ -107,7 +107,7 @@ timings. This phase exists because an unverifiable change is not a change.
   `VISUAL_EVIDENCE.md`.
 - **Performance:** one `u32` comparison per fragment in production; the
   diagnostic branch is uniform per patch and not taken. Native frame time with
-  diagnostics enabled is **unmeasured** (P0-04 is blocked).
+  diagnostics enabled is **unmeasured** (no diagnostic-mode timing run).
 - **Scientific validation:** none; diagnostics only. Every mode reads an input the
   production shader already uses, and the terrain authority is untouched.
 - **Risks:** a wrong uniform layout silently kills the terrain material, so the
@@ -118,24 +118,40 @@ timings. This phase exists because an unverifiable change is not a change.
   showed is recorded under TD-05.
 
 ### P0-04 — Performance baseline refresh on current commit
-- **Status:** BLOCKED
+- **Status:** VERIFIED
 - **Priority:** P1
 - **Objective:** Re-measure p50/p95/p99/worst frame at the current commit.
-- **Dependencies:** a presentable window (environment). A 20 s windowed probe on
-  2026-11-09 presented without a swapchain error, so the blocker may have
-  cleared; the release measurement itself has not been run.
+- **Dependencies:** a presentable window; satisfied by the 2026-11-09 X11/i3
+  session on the RTX 5070 Laptop.
 - **Subsystems:** performance telemetry.
-- **Expected files:** `docs/progress/PERFORMANCE_BASELINES.md`,
-  `docs/native_release_performance_audit.md`.
-- **Acceptance:** a release run with `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1` at 720p
-  and 1440p, recorded with commit hash and machine.
+- **Evidence commit:** `8ea9207` (release, `--features dem`).
+- **Acceptance:** met — a release run with
+  `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1` at 720p and 1440p, recorded with commit
+  hash and machine in `PERFORMANCE_BASELINES.md`.
+- **What was measured:** prelaunch at the default Papua site, 600-sample rolling
+  windows after streaming settled. 720p: p50 19.76 / p95 27.25 / p99 32.15 ms.
+  1440p: p50 51.11 / p95 59.07 / p99 63.71 ms. Worst frame, GPU pass time, draw
+  calls and triangle counts are not exposed by the telemetry and are recorded as
+  such rather than estimated.
+- **Defects found (audit):**
+  1. The window was hard-coded at 1280x720 and i3 tiles a new window to its
+     container, so the requested resolution was not the measured resolution.
+     Added `COSMIC_SYSTEMS_WINDOW_SIZE=WxH` with a validated parser (two tests)
+     and forced the window floating at the exact rect for each run.
+  2. With the default AutoVsync on this PRIME display the event loop quantizes to
+     about one present per second (p50 ≈ 999.6 ms). The documented profiling mode
+     `COSMIC_SYSTEMS_PRESENT_MODE=none` removes that present stall; the recorded
+     numbers are render/update cost without a present-blocked frame.
+- **Limit recorded:** rocket mode leaves the pad on a Space press and this session
+  has no input injection into the window, so only prelaunch was measured. Ascent,
+  staging and camera stress remain unmeasured at this commit.
 - **Tests:** none (measurement).
 - **Visual evidence:** not applicable.
 - **Performance:** the measurement itself.
 - **Scientific validation:** none.
-- **Risks:** the offscreen path is 60 Hz-pinned and cannot substitute.
-- **Completion evidence:** blocked on the presentation failure recorded in
-  `README.md`; last real numbers are from 2026-09-11.
+- **Risks:** the 720p/1440p rows use vsync-off and prelaunch, so they are not
+  comparable to the 2026-09-11 vsync-on rows; both tables say so.
+- **Completion evidence:** `PERFORMANCE_BASELINES.md`, 2026-11-09 section.
 
 ---
 
@@ -261,8 +277,8 @@ timings. This phase exists because an unverifiable change is not a change.
   base; a resident payload is the finer measurement and outranks it.
 - **Risks:** preloading whole payload regions would defeat the residency budget;
   the fix loads one tile per site, not a region. The global startup bake still
-  touches thousands of 2 ° erosion tiles, which the P0-04 performance work must
-  revisit.
+  touches thousands of 2 ° erosion tiles; P0-04 measured prelaunch only, so the
+  erosion cold-start cost is still unmeasured.
 - **Baseline decoupling:** the ascent fixture pins its launch altitude and uses a
   flat pad (`c886205`, `17bc6f5`), so neither TD-10 nor TD-11 moves the committed
   trajectories.
@@ -1430,7 +1446,8 @@ timings. This phase exists because an unverifiable change is not a change.
 - **Performance:** the sky march is 16 view × 8 sun samples per pixel at every
   altitude; the cost is altitude-independent by construction. It was not
   separately timed because no window/telemetry path is available on this
-  machine (P0-04 blocked); this is a reasoning statement, not a measurement.
+  machine; P0-04 measured prelaunch on 2026-11-09, so this is now a measured
+  prelaunch statement, not an altitude measurement.
 - **Scientific validation:** atmosphere table documented with source in
   `src/domain/services/atmosphere.rs`; Rayleigh 8 km / Mie 1.2 km / ozone 25 km
   in `atmospheric_optics.rs`.
@@ -1769,22 +1786,37 @@ timings. This phase exists because an unverifiable change is not a change.
 ## Phase P9 — Final validation
 
 ### VL-01 — Three-mode smoke at the current commit
-- **Status:** BLOCKED
+- **Status:** VERIFIED
 - **Priority:** P0
 - **Objective:** `cargo run`, `cargo run -- craft`, `cargo run -- rocket` each run
   for 25 s with zero shader/panic/wgpu errors.
-- **Dependencies:** a presentable window (environment). The 20 s windowed probe
-  above presented, but the three-mode acceptance run has not been repeated.
+- **Dependencies:** a presentable window; satisfied by the 2026-11-09 X11/i3
+  session.
 - **Subsystems:** all.
-- **Expected files:** none.
-- **Acceptance:** three exit codes 124 (timeout), zero error matches in each log.
+- **Evidence commit:** `39bed95` (three-mode run) and `8ea9207` (windowed frames
+  re-captured at the same tree).
+- **Acceptance:** met — `solar`, `craft` and `rocket` each ran 25 s and each
+  exited `124`; a case-insensitive scan for ` ERROR `, `panicked at` and
+  `wgpu.*Error` found 0 matches in all three logs.
+- **Visual evidence:** one windowed frame per mode, captured with the in-app F12
+  screenshot path:
+  `2026-11-09-vl01-solar.jpg`, `2026-11-09-vl01-craft.jpg`,
+  `2026-11-09-vl01-rocket.jpg`.
+- **What this does and does not prove:** it proves each mode starts, creates a
+  surface, streams, and runs its loop without a render or shader error. The
+  frames show the HUD and scene for each mode. It does not prove input
+  interaction beyond the F12 key, nor frame pacing; pacing is P0-04's evidence.
+- **Defects found (audit):** none in the application. The session needed the
+  window made floating to obtain a defined rect, and the screenshot key had to be
+  sent to the focused window because the first `xdotool` search raced window
+  creation.
 - **Tests:** not applicable.
-- **Visual evidence:** one frame per mode.
 - **Performance:** not applicable.
 - **Scientific validation:** not applicable.
-- **Risks:** the presentation failure on this machine masks a real regression.
-- **Completion evidence:** last successful run at `fb686ba`; **not** re-run at
-  `d89e7d6`.
+- **Risks:** a future presentation regression still needs a real desktop run;
+  these logs now say which session produced them.
+- **Completion evidence:** `target/vl01/*.log` (run records) and the three frames
+  above.
 
 ### VL-02 — OpenSpec strict validation
 - **Status:** VERIFIED

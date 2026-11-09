@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-09. Last code checkpoint: `16cb836`.
+Snapshot: 2026-11-09. Last code checkpoint: `8ea9207`.
 
 ---
 
@@ -30,8 +30,8 @@ and a measurement path that captures frames without a swapchain.
 **Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
 The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06
 edge structure, RD-01 invalidation audit and VL-03 visual acceptance — are
-implemented, evidenced and archived; only P0-04 and VL-01 still need their own
-measurement and smoke runs.
+implemented, evidenced and archived. The two former blockers also closed on
+2026-11-09: the release baseline (P0-04) and the three-mode smoke (VL-01).
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
 because the shared default epoch is local noon only at Papua. Resident regional
@@ -51,7 +51,7 @@ match off, and at the same 40 km pose the region/overview tone ratio falls from
 | defect | state |
 | --- | --- |
 | Rectangular tone blocks at 300–1,200 km | **verified and closed.** Per-vertex roughness removed the land term: the seam that motivated the task measures −0.04/255 against its own trend (was +4.14), frame-wide median +0.25/255 at 300 km and +0.47/255 at 1,200 km. The ocean half was refuted with six new water views |
-| Synthetic detail fabricates lakes on the coastal plain | guard implemented, activation blocked |
+| Synthetic detail fabricates lakes on the coastal plain | **verified and closed.** A land-only sea-datum guard, bounded by the octave amplitude, stops negative detail crossing the datum on land while the ocean floor keeps signed relief; all three baselines unchanged (`2026-11-05-td06-papua-*`) |
 | Three launch pads sat under water: Starbase, KSC and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | **verified and closed.** Resident payloads replace the erosion refinement, the platform is floored 3 m above the sea datum, and all seven captured pads are dry |
 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | **verified and closed.** Erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean and Baikonur to 3.0–3.2/255, the same as two identical warm runs. A cold or cache-off run needs ~1,200 frames to finish streaming |
 | Land nearly black at 400 km while clouds are white | **verified — explained, and the near-ground half fixed.** The altitude albedo is identical at 400 km and 3 km; the deck is white because it is white and the forest albedo is ~4 %. The near ground was 2.2× brighter because the local surface map carried absolute albedo 4× the measured overview; it is now a tint anchored to the overview, so a descent moves the tone +2 % instead of +128 % (TM-04) |
@@ -60,7 +60,7 @@ match off, and at the same 40 km pose the region/overview tone ratio falls from
 | Vegetation reads as specks | **verified and improved.** Near-band crowns are closed lobed volumes rather than crossed cards, and foliage sway is graded from each vertex's attachment. The far band keeps impostors for density. `2026-11-08-vg02-papua-300m-crown.jpg`, `2026-11-08-vg03-wind-*` |
 | Regional imagery steps at its patch edge | **verified and closed.** The edge is now a 16.6 km cross-fade at the region bound; the worst step near the bound fell from 4.23 to 0.72/255 (the frame's own texture level) and the change is confined to the declared band |
 | No geometric terrain detail beyond LOD 11 | **verified and closed.** A mesh-only ~4 km / ±30 m band on LOD 5–11 adds distant relief; collision, anchor and coastline are unchanged (`2026-11-07-tm02-*`) |
-| **Windowed presentation** | a 20 s windowed probe on 2026-11-09 presented without a swapchain error or lost surface, so the earlier environment blocker may have cleared. This is a probe, not the acceptance smoke: `VL-01` still needs three clean 25 s mode runs, and `P0-04` still needs the release frame-time rows |
+| **Windowed presentation** | **resolved for validation.** All three modes present on the 2026-11-09 X11/i3 session and the three-mode smoke passes. With the default AutoVsync the loop quantizes to about one present per second on this PRIME display, so P0-04 uses the documented vsync-off profiling mode and says so |
 
 The windowed probe changes what is known about the environment but does not
 close `P0-04` or `VL-01`; both still require their own acceptance runs. The
@@ -68,8 +68,8 @@ offscreen path remains the capture path either way.
 
 ## What has been verified?
 
-Forty-three of forty-five roadmap tasks, each with implementation + tests + a
-named frame or a named measurement:
+All forty-five roadmap tasks, each with implementation + tests + a named frame
+or a named measurement:
 
 | task | evidence |
 | --- | --- |
@@ -116,22 +116,21 @@ named frame or a named measurement:
 | LF-04 facility scale | clamp ring, level count and support scaling follow the vehicle envelope; hardstand and trench stay fixed; `cf3fd0a` |
 | VL-02 OpenSpec strict | 43/43 |
 | VL-03 visual acceptance | manifest + harness; `10 scenes pass`, including an orbital-altitude 400 km viewpoint |
+| P0-04 performance baseline | release `8ea9207`, vsync off, prelaunch: 720p p50/p95/p99 19.76/27.25/32.15 ms, 1440p 51.11/59.07/63.71 ms; `PERFORMANCE_BASELINES.md` |
+| VL-01 three-mode smoke | `solar`, `craft`, `rocket` each 25 s, all exit 124, zero hard errors; one windowed frame per mode (`2026-11-09-vl01-*`) |
 
-Every implemented task is now verified. The only remaining items are the two
-environmental blockers; there is no planned work left in this programme.
+Every roadmap task is now verified. There is no remaining implementation or
+measurement item in this programme.
 
 ## What is blocked or needs a decision?
 
-| task | reason |
-| --- | --- |
-| P0-04 performance baseline | release frame-time rows not yet measured |
-| VL-01 three-mode smoke | three clean 25 s runs not yet repeated |
+**Nothing.** The two former environmental blockers closed on 2026-11-09. Their
+limits are recorded rather than hidden: P0-04 measured prelaunch only, with vsync
+off, and VL-01 does not exercise input beyond the screenshot key.
 
 ## What should be built next?
 
-**Nothing in this realism programme is unblocked.** All 43 non-blocked tasks are
-verified. P0-04 and VL-01 need a presentable Vulkan swapchain, which this machine
-does not provide.
+**The realism programme is complete.** All 45 tasks are verified.
 
 If the programme is extended, the known residuals are the smallest visible
 defects rather than unstarted roadmap items: a ~0.4 m sea-cap sliver at one
@@ -149,8 +148,8 @@ audit.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1200 passed, 2 ignored
-cargo test --no-default-features --lib   # 1148 passed, 2 ignored
+cargo test --features dem --lib          # 1202 passed, 2 ignored
+cargo test --no-default-features --lib   # 1150 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -173,10 +172,9 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,200 domain and adapter
-tests pass (1,148 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified forty-three of its forty-five tasks; the two
-remaining are acceptance runs rather than implementation.
+The simulator runs and its physics is regression-locked; 1,202 domain and adapter
+tests pass (1,150 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified all forty-five tasks.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -194,9 +192,11 @@ that term put the near frame back at the orbital level (4.36 → 1.98), and the
 map is now a tint anchored to the overview, so a descent changes the tone by
 +2 % instead of +128 %.
 
-Two hard constraints are recorded rather than worked around. The machine cannot
-present a Vulkan surface, so windowed validation is blocked and the offscreen
-capture path exists instead. The other was a terrain guard that would stop
+Two hard constraints were recorded rather than worked around, and one has since
+cleared. Windowed validation now runs on the X11/i3 session; the offscreen capture
+path remains because it is deterministic and does not need a compositor. The
+other constraint is the terrain guard that would stop synthetic relief from
+fabricating lakes. The other was a terrain guard that would stop
 synthetic relief from fabricating lakes. It is now enabled, but only after the
 baseline shift was isolated rather than accepted: the guard had been suppressing
 negative detail across the entire ocean floor, and the orbital fixture samples

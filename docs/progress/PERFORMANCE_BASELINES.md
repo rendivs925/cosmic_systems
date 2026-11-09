@@ -6,14 +6,54 @@ Measurements only. No optimisation is claimed from any row here.
 
 | field | value |
 | --- | --- |
-| Last measured commit | `feat/rocket-simulation` @ Phase 17 (2026-08-23) and `e501707`-era release audit (2026-09-11) |
-| Measured at the current code checkpoint (`16cb836`) | **NO** |
-| Reason | The windowed run cannot present on this machine (see `README.md`), and the offscreen capture path is pinned to a 60 Hz `ScheduleRunnerPlugin` by construction, so its frame times are the runner's cadence, not render cost |
-| Next action | P0-04; a 20 s windowed probe on 2026-11-09 presented, so the release 720p/1440p runs are now attemptable |
+| Last measured commit | `8ea9207` (2026-11-09, release, prelaunch, 720p and 1440p) |
+| Measured at the current code checkpoint | **YES — prelaunch only** |
+| Reason for the scenario limit | Rocket mode leaves the pad on a Space press and this session has no input injection into the window. Prelaunch is therefore the only reachable scenario; ascent, staging and camera stress remain unmeasured at this commit |
+| Frame-time mode | `COSMIC_SYSTEMS_PRESENT_MODE=none` (AutoNoVsync). With the default AutoVsync on this PRIME display the loop quantizes to a 1 s present, p50 ≈ 999.6 ms; that is a present stall, not render cost |
+| Next action | none for P0-04's two resolutions; GPU pass timing, worst frame, draw calls and triangle counts remain unexposed by the telemetry |
 | Diagnostic modes | implemented 2026-11-01; production cost is one `u32` comparison per fragment, and *no* native frame time with a mode enabled has been measured |
 
 Do not read the tables below as describing the current build. They describe the
 builds named in them.
+
+## 2026-11-09 — current-commit release measurement (P0-04)
+
+Environment: Ryzen 9 8940HX (16 cores, 30.6 GiB), NVIDIA GeForce RTX 5070
+Laptop (driver 615.78.08) via X11/i3, eDP 2560x1600 @ 240 Hz plus HDMI
+3840x2160 @ 144 Hz. Release binary `./target/release/cosmic_systems rocket`
+built with `--features dem` from `8ea9207`.
+`COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame rolling window, prelaunch at
+the default Papua site, no camera input.
+
+i3 tiles a new window to its container, so the requested size is not the
+measured size by default. Each run was made floating and resized to the named
+physical size, and the i3 rect was read back before the measurement window:
+
+| scenario | window rect | CPU p50 / p95 / p99 (ms) | worst | GPU | effects visible / update (ms) |
+| --- | --- | ---: | --- | --- | ---: |
+| prelaunch, 720p | 1280x720 | 19.76 / 27.25 / 32.15 | not exposed | not exposed | 0 / 0.024 |
+| prelaunch, 1440p | 2560x1440 | 51.11 / 59.07 / 63.71 | not exposed | not exposed | 0 / 0.018 |
+
+The figures are the final full 600-sample window after terrain streaming had
+settled; earlier windows drift upward while the startup upload burst is still
+in the terrain pipeline. Vsync is deliberately off: on this machine AutoVsync
+takes about one second per present, which would report the compositor rather
+than the frame cost. These are therefore render/update costs without a
+present-blocked frame, and they are not comparable to the 2026-09-11 table
+above, which was recorded with the default vsync and a different vehicle
+state.
+
+Reproduction:
+
+```bash
+COSMIC_SYSTEMS_PRESENT_MODE=none \
+COSMIC_SYSTEMS_PERFORMANCE_METRICS=1 \
+COSMIC_SYSTEMS_WINDOW_SIZE=1280x720 \
+  ./target/release/cosmic_systems rocket
+# then, once the window exists:
+i3-msg '[title="Cosmic Systems - Rocket Flight"] floating enable'
+i3-msg '[title="Cosmic Systems - Rocket Flight"] resize set 1280 720'
+```
 
 ## 2026-09-11 — native release audit
 

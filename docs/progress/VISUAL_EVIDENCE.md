@@ -64,6 +64,22 @@ A missing recipe means `--capture` cannot rebuild that scene yet; `--check` stil
 uses the committed frame. All ten scenes are present, and `--check` reports
 `10 scenes pass`.
 
+## Mode smoke frames (VL-01)
+
+One windowed frame per run mode, captured with the in-app F12 screenshot path at
+`8ea9207`. These are smoke evidence, not quality references: they show that each
+mode starts, presents and draws its own HUD/scene.
+
+| file | mode | window rect | sha256 (first 16) | demonstrates |
+| --- | --- | --- | --- | --- |
+| `2026-11-09-vl01-solar.jpg` | `solar` | 929x2076 tiled | `249b7ada2dab13e2` | Sun and starfield render in the default mode |
+| `2026-11-09-vl01-craft.jpg` | `craft` | 1885x1029 | `ba3939a796143b1e` | craft HUD and planet render; `fps 28` |
+| `2026-11-09-vl01-rocket.jpg` | `rocket` | 1885x2076 tiled | `cf81b84b65619d3c` | prelaunch HUD, pad, tower and terrain; `fps 33` |
+
+The windows are i3-tiled, so the rect is the container i3 gave them rather than
+the requested size. P0-04 forces its measurement windows floating; these smoke
+frames keep the tiled rect so they show the normal session.
+
 ## Registry
 
 | file | commit | pose | time | frames | sha256 (first 16) | demonstrates | pass criterion |

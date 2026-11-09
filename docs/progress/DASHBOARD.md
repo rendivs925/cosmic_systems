@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-09.
-Last code checkpoint: `16cb836` (2026-11-09).
+Last code checkpoint: `8ea9207` (2026-11-09).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -11,10 +11,10 @@ evidenced", not "the simulator does not work".
 
 | state | count | share of roadmap |
 | --- | ---: | ---: |
-| VERIFIED | 43 | 95.6 % |
+| VERIFIED | 45 | 100 % |
 | IMPLEMENTED (not verified) | 0 | 0 % |
 | IN_PROGRESS | 0 | 0 % |
-| BLOCKED | 2 | 4.4 % |
+| BLOCKED | 0 | 0 % |
 | PLANNED | 0 | 0 % |
 | **total** | **45** | 100 % |
 
@@ -22,7 +22,7 @@ evidenced", not "the simulator does not work".
 
 | phase | verified / total | share | state | blocker |
 | --- | ---: | ---: | --- | --- |
-| P0 Measurement foundations | 3 / 4 | 75 % | active | P0-04 needs the release frame-time runs |
+| P0 Measurement foundations | 4 / 4 | 100 % | complete | P0-01…04 closed |
 | P1 Data and terrain correctness | 12 / 12 | 100 % | complete | TD-07, TD-08, TD-09 and TD-12 closed |
 | P2 Launch facility | 4 / 4 | 100 % | complete | LF-01…04 closed |
 | P3 Terrain materials | 4 / 4 | 100 % | complete | TM-01, TM-02, TM-03 and TM-04 closed |
@@ -31,7 +31,7 @@ evidenced", not "the simulator does not work".
 | P6 Atmosphere | 4 / 4 | 100 % | complete | AT-04 closed the single-scattering horizon hue; the cloud-deck edge remains a cloud task |
 | P7 Rocket and VFX | 2 / 2 | 100 % | complete | RK-01 and RK-02 closed |
 | P8 Rendering optimisation | 3 / 3 | 100 % | complete | RD-01…03 closed |
-| P9 Final validation | 2 / 3 | 67 % | active | VL-01 needs three clean 25 s mode runs; VL-02 and VL-03 closed |
+| P9 Final validation | 3 / 3 | 100 % | complete | VL-01…03 closed |
 
 ## Critical unresolved defects
 
@@ -49,7 +49,7 @@ Ordered by visible impact, not by ease.
 | 8 | Noon horizon turns tan at 10 km and pink at 30–70 km; the faint limb tail reads teal | AT-04 | **VERIFIED — fixed** | bounded luminance-preserving diffuse fill; +2° saturation 0.252/0.467/0.655 → 0.204/0.305/0.344 at 10/30/70 km, teal band 0.670 → 0.339, limb e-folding 8.24/8.45 → 8.30/8.33 km; `2026-11-05-at04-*` |
 | 9 | Three graded pads sat under water: Starbase, KSC LC-39A and Wallops were −0.78, −0.14 and −13.61 m against the local sea datum | TD-11 | **VERIFIED — fixed** | resident payloads replace the erosion refinement and a 3 m platform floor raises each pad; `2026-11-05-td02-*-fixed.jpg` shows all seven flush; clearances +3.00 … +113.55 m |
 | 10 | Terrain outside the resident payload tile depended on the erosion cache: rasters were baked from the streamed payload overlay, so load order and an old disk tile changed height, moisture and flow | TD-10 | **VERIFIED — fixed** | erosion now bakes from the immutable measured global DEM (`5134ed2`); Starbase cold/warm/off agree to 2.4–2.5/255 mean, Baikonur to 3.0–3.2/255, the same as repeat-run noise; `2026-11-05-td10-*` |
-| 11 | Windowed presentation fails on this machine | env | external | one present, then swapchain lost |
+| 11 | Windowed presentation failed on this machine | env | **resolved for validation** | the 2026-11-09 X11/i3 session presents all three modes; with the default AutoVsync the loop quantizes to ~1 s per present, so P0-04 uses the documented vsync-off profiling mode |
 | 12 | The regional Sentinel-2 mosaic rendered as a pale inset against the Blue Marble overview | TD-03 | **VERIFIED — fixed** | measured per-channel linear gain applied before mips; region/overview linear-luma ratio 3.87× → 1.16×, median before/after ratio matches the inverse gain to 0.2 %; `2026-11-05-td03-albedo-40km-*` |
 | 13 | Angular water bodies persist on the Papua plain after the detail guard | TD-12 | **VERIFIED — measured, plus a flooding bug** | the finest NASADEM payload is 4.3 cm below the datum (source class Ocean); the eroded base is +4 m above it, so erosion is not involved. The cap had used its 0.5 m depth-test offset as a flood threshold, submerging measured land at 0.28–0.46 m; classification now follows the datum and the offset is 0.05 m. Pale water-like share 8.19 % → 3.27 %; `2026-11-07-td12-papua-after.jpg` |
 | 14 | A separated stage stayed frozen in the sky, and the rebuilt upper-stage mesh sat half an envelope low | RK-01 | **VERIFIED — fixed** | debris render snapshots now advance without a mission state; the serial mesh is built in the stage frame; the debug tripod also used the solar factor and drew at the planet centre; `2026-11-06-rk01-*` |
@@ -59,16 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | d72c5fc |
-| `cargo check --all-targets --features dem` | PASS | d72c5fc |
-| `cargo check --no-default-features` | PASS | d72c5fc |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | d72c5fc |
-| `cargo test --features dem --lib` | 1200 passed, 0 failed, 2 ignored | d72c5fc |
-| `cargo test --no-default-features --lib` | 1148 passed, 0 failed, 2 ignored | d72c5fc |
-| `openspec validate --all --strict` | 43 passed, 0 failed | d72c5fc |
-| `cargo build --release --features dem` | PASS | eba5d6e |
-| three-mode smoke (25 s each) | **not re-run** — a 20 s windowed probe presented on 2026-11-09; the three-mode acceptance run is pending | — |
-| visual capture path | works offscreen; windowed blocked | `d89e7d6` |
+| `cargo fmt --check` | PASS | 8ea9207 |
+| `cargo check --all-targets --features dem` | PASS | 8ea9207 |
+| `cargo check --no-default-features` | PASS | 8ea9207 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 8ea9207 |
+| `cargo test --features dem --lib` | 1202 passed, 0 failed, 2 ignored | 8ea9207 |
+| `cargo test --no-default-features --lib` | 1150 passed, 0 failed, 2 ignored | 8ea9207 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 8ea9207 |
+| `cargo build --release --features dem` | PASS | 8ea9207 |
+| three-mode smoke (25 s each) | PASS — all three exit 124, zero hard errors; `39bed95` | `39bed95` |
+| visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
 | region-edge harness | `scripts/imagery_region_mask.py` + `scripts/measure_tone_edge.py` report the imagery edge at 4.23/255 before and 0.72/255 after, and the change confined to 16.4 km | 81f3c04 |
@@ -97,10 +97,10 @@ All ten required scenes are current; `scripts/visual_acceptance.py` reports
 
 | field | value |
 | --- | --- |
-| Current-commit measurement | **none** |
+| Current-commit measurement | prelaunch release at `8ea9207`, vsync off: 720p 19.76 / 27.25 / 32.15 ms, 1440p 51.11 / 59.07 / 63.71 ms (p50/p95/p99) |
 | Last CPU p50/p95/p99 (prelaunch, release, discrete GPU) | 16.66 / 17.63 / 19.04 ms (2026-09-11) |
 | Last CPU p50/p95/p99 (ascent) | 13.53 / 25.28 / 27.36 ms (2026-09-11) |
-| Worst frame | not recorded |
+| Worst frame | not exposed |
 | GPU frame time | not exposed |
 | Draw calls / triangles | not exposed |
 | Memory | 1,261–1,492 MiB GPU; ~1.77 GB RSS (2026-09-11); 610–640 MB RSS (2026-08-23) |
@@ -123,20 +123,16 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Next task — two acceptance runs.** All 43 implementation tasks are verified;
-P0-04 and VL-01 are measurement/smoke tasks that need their own runs. A 20 s
-windowed probe on 2026-11-09 presented without a swapchain error, so the earlier
-environmental blocker may have cleared, but neither acceptance criterion has
-been met yet: P0-04 needs release frame-time rows at 720p and 1440p, and VL-01
-needs three clean 25 s mode runs. The five slices closed in the
-submission pass are recorded in `MASTER_ROADMAP.md`:
+**The realism programme is complete.** All 45 tasks are VERIFIED. The two former
+blockers closed on 2026-11-09: `VL-01` with three clean 25 s mode runs, and
+`P0-04` with release measurements at 720p and 1440p.
 
-* VG-03 shares one measured wind direction between deck and foliage and grades
-  sway from each vertex's attachment.
-* CL-05 re-weights the existing Worley octaves for a cell-size spectrum with no
-  extra fetch.
-* CL-06 makes the coverage edge a resolved quarter-band and filters the march to
-  the pixel footprint.
-* RD-01 classified every per-frame terrain system; the only remaining write was
-  the vegetation uniform rewriting unchanged inputs.
-* VL-03 machine-checks the ten required scenes; `10 scenes pass`.
+The measurement limits are recorded rather than rounded away: P0-04 measured
+prelaunch only (no input injection for the Space launch), with vsync off because
+AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
+GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
+
+Extension work is a separate scientific-correctness track, not remaining roadmap
+items: frame handedness audit, retro-propulsion during ascent, Falcon 9 provenance,
+aerodynamic axes, per-thruster RCS allocation, closed-loop insertion, and a WGS-84
+datum audit.

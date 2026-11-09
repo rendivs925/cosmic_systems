@@ -225,3 +225,38 @@ present mode, and start state (Papua pad, 40–46 s windows,
   shadows is no longer present in these captures (the disc now has
   `NotShadowCaster`/`NotShadowReceiver`), but the fix has not been compared
   against every Sun elevation.
+
+## 2026-11-09 — Current-commit baseline (P0-04)
+
+Recorded on the X11/i3 session with the release binary from `8ea9207`
+(`--features dem`). This update closes the two missing resolution rows only; it
+does not re-run the 2026-09-11 scenarios.
+
+| Item | Value |
+|---|---|
+| CPU | AMD Ryzen 9 8940HX, 16 cores, 30.6 GiB |
+| GPU | NVIDIA GeForce RTX 5070 Laptop, driver 615.78.08 |
+| Displays | eDP 2560x1600 @ 240 Hz; HDMI 3840x2160 @ 144 Hz |
+| Binary | `./target/release/cosmic_systems rocket` |
+| Metrics | `COSMIC_SYSTEMS_PERFORMANCE_METRICS=1`, 600-frame windows |
+| Present mode | `COSMIC_SYSTEMS_PRESENT_MODE=none` |
+
+| Scenario | Window | CPU p50/p95/p99 (ms) | Worst | Effects visible/update (ms) |
+|---|---:|---:|---|---:|
+| Prelaunch, 720p | 1280x720 | 19.76 / 27.25 / 32.15 | not exposed | 0 / 0.024 |
+| Prelaunch, 1440p | 2560x1440 | 51.11 / 59.07 / 63.71 | not exposed | 0 / 0.018 |
+
+Two environment findings are part of the result:
+
+* i3 tiles new windows to its container. The requested resolution is therefore
+  not the measured resolution unless the window is made floating and resized; the
+  rect above was read back from i3 before the measurement window.
+* With the default `AutoVsync` on this PRIME display the event loop quantized to
+  about one present per second (p50 ≈ 999.6 ms). The documented profiling mode
+  removes that present stall. The numbers are render/update cost without a
+  present-blocked frame and are not comparable to the vsync-on 2026-09-11 rows.
+
+Rocket mode leaves the pad on a Space press and this session has no input
+injection into the window, so only prelaunch is reachable. Ascent, staging,
+camera stress, GPU pass time, worst frame, draw calls and triangle counts remain
+unmeasured or unexposed, and are not estimated.
