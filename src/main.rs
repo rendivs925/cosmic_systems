@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use std::env;
 use std::num::NonZero;
 
-use cosmic_systems_wasm::application::modes::{parse_launch_options, Mode};
+use cosmic_systems_wasm::application::modes::{parse_launch_options, window_size_from_env, Mode};
 use cosmic_systems_wasm::application::offscreen_capture::{
     OffscreenCapture, OffscreenCapturePlugin,
 };
@@ -94,7 +94,7 @@ fn main() {
         WindowPlugin {
             primary_window: Some(Window {
                 title: mode.title().to_string(),
-                resolution: (1280, 720).into(),
+                resolution: window_size_from_env().unwrap_or((1280, 720)).into(),
                 present_mode,
                 desired_maximum_frame_latency: NonZero::<u32>::new(2),
                 ..default()

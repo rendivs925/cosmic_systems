@@ -138,9 +138,44 @@ where
     Ok(options)
 }
 
+/// Window-size override for measurement runs, in physical pixels.
+///
+/// The default window is 1280x720. P0-04 needs the same build measured at
+/// 720p and 1440p, so the size is a launch-time presentation knob rather than
+/// a rebuild. It affects only the window; simulation and rendering paths are
+/// identical.
+pub const WINDOW_SIZE_ENV: &str = "COSMIC_SYSTEMS_WINDOW_SIZE";
+
+/// Largest accepted window dimension, to catch a transposed or malformed
+/// measurement value before creating a surface.
+const MAX_WINDOW_DIMENSION: u32 = 16_384;
+
+/// Parse a `WIDTHxHEIGHT` window size. Zero, non-numeric and out-of-range
+/// values are rejected; the caller decides whether that is fatal.
+pub fn parse_window_size(value: &str) -> Option<(u32, u32)> {
+    let (width, height) = value.split_once('x')?;
+    let width: u32 = width.trim().parse().ok()?;
+    let height: u32 = height.trim().parse().ok()?;
+    if width == 0 || height == 0 || width > MAX_WINDOW_DIMENSION || height > MAX_WINDOW_DIMENSION {
+        return None;
+    }
+    Some((width, height))
+}
+
+/// Read the window-size override for a measurement run. Unset means the
+/// documented 1280x720 default. A malformed value is a configuration error
+/// and fails before the renderer starts, rather than silently measuring a
+/// different resolution than the one claimed.
+pub fn window_size_from_env() -> Option<(u32, u32)> {
+    let value = std::env::var(WINDOW_SIZE_ENV).ok()?;
+    Some(parse_window_size(&value).unwrap_or_else(|| {
+        panic!("Invalid {WINDOW_SIZE_ENV}='{value}': expected WIDTHxHEIGHT, e.g. 2560x1440")
+    }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_launch_options, LaunchOptionError, LaunchOptions, Mode};
+    use super::{parse_launch_options, parse_window_size, LaunchOptionError, LaunchOptions, Mode};
     use crate::domain::services::gravity::ForceModelTier;
     use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 
@@ -272,5 +307,20 @@ mod tests {
             ]),
             Err(LaunchOptionError::UnknownForceModel("warp".to_string()))
         );
+    }
+
+    #[test]
+    fn parses_the_measurement_window_sizes() {
+        assert_eq!(parse_window_size("1280x720"), Some((1280, 720)));
+        assert_eq!(parse_window_size("2560x1440"), Some((2560, 1440)));
+        assert_eq!(parse_window_size(" 1920 x 1080 "), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn rejects_malformed_window_sizes() {
+        for value in ["", "1280", "1280*720", "0x720", "1280x0", "-1x720", "ax720"] {
+            assert_eq!(parse_window_size(value), None, "accepted {value:?}");
+        }
+        assert_eq!(parse_window_size("16385x720"), None);
     }
 }
