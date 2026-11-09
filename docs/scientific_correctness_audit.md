@@ -230,3 +230,4 @@ the previous floor was 1,202 with `dem` and 1,150 without.
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
 | `cargo test --features dem --lib` | 1,207 passed, 2 ignored |
 | `cargo test --no-default-features --lib` | 1,155 passed, 2 ignored |
+| three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
