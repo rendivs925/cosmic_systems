@@ -613,12 +613,17 @@ pub struct RocketAutopilot {
 }
 
 impl RocketAutopilot {
-    /// Autopilot configured for a launch site at `latitude_deg`.
+    /// Autopilot configured for a launch site at geocentric `latitude_deg`.
     ///
-    /// A prograde launch due east from latitude `phi` reaches an orbital
-    /// inclination of `|phi|`, so the minimum-energy ascent plane is the site
-    /// latitude. This sets the one authoritative target inclination consumed by
-    /// ascent guidance and orbit-insertion checks.
+    /// A prograde launch due east from geocentric latitude `phi` reaches an
+    /// orbital inclination of `|phi|`, so the minimum-energy ascent plane is
+    /// the site's geocentric latitude. On an ellipsoid that is **not** the
+    /// geodetic latitude: for Earth the caller must pass the terrain/radial
+    /// latitude from [`crate::domain::services::reference_frames::
+    /// geodetic_to_terrain_lat_lon`]. Starbase is 25.9971° geodetic but
+    /// 25.8458° geocentric, so a geodetic input would target a plane the
+    /// ascent cannot reach. This sets the one authoritative target inclination
+    /// consumed by ascent guidance and orbit-insertion checks.
     pub fn for_launch_site(latitude_deg: f64) -> Self {
         let mut autopilot = Self::default();
         autopilot.target_orbit.target_inclination_rad = latitude_deg.abs().to_radians();
@@ -805,7 +810,9 @@ pub struct CommsState {
 
 /// Thrust effectiveness multiplier from supersonic retro-propulsion
 /// (DLR base-pressure correlation). Computed in EntryPhysics, consumed by
-/// propulsion_thrust so there is exactly one thrust writer.
+/// propulsion_thrust so there is exactly one thrust writer. Stays 1.0 unless
+/// the plume faces the freestream: a powered ascent thrusting along its
+/// velocity must not have thrust reduced.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct RetroPropulsionEffect {
     pub thrust_multiplier: f64,

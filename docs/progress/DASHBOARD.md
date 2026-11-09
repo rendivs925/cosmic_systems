@@ -133,6 +133,8 @@ AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
 GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
 
 Extension work is a separate scientific-correctness track, not remaining roadmap
-items: frame handedness audit, retro-propulsion during ascent, Falcon 9 provenance,
-aerodynamic axes, per-thruster RCS allocation, closed-loop insertion, and a WGS-84
-datum audit.
+items. It is open and recorded in `docs/scientific_correctness_audit.md`: two
+defects fixed (retro-propulsion applied to powered ascents; insertion targeting
+the geodetic instead of geocentric site latitude) and five audited gaps (frame
+handedness — no defect found, aerodynamic axis naming, per-thruster RCS
+allocation, closed-loop insertion, Falcon 9 provenance).

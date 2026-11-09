@@ -14,7 +14,10 @@
 //!   change.
 //! - Supersonic retro-propulsion: DLR-style base-pressure correlation. The
 //!   effective-thrust multiplier decreases monotonically with Mach above the
-//!   threshold and clamps at [`MIN_RETRO_EFFECTIVENESS`].
+//!   threshold and clamps at [`MIN_RETRO_EFFECTIVENESS`]. It applies only when
+//!   the plume faces the freestream
+//!   ([`retro_propulsion_plume_faces_freestream`]); an ascent thrusting along
+//!   its velocity keeps full thrust.
 //! - Parachutes: drogue mortar-deploy gated on Mach/altitude AND a descent
 //!   direction (deployment into an ascending airstream would destroy the
 //!   canopy), reefed inflation over `reef_time_s`, main gated on altitude
@@ -138,6 +141,24 @@ pub fn retro_propulsion_effectiveness(
     }
     let mach_excess = (mach - mach_threshold).min(MAX_RETRO_MACH_EXCESS);
     (1.0 - base_pressure_coefficient * mach_excess).max(MIN_RETRO_EFFECTIVENESS)
+}
+
+/// Whether an engine plume faces the oncoming freestream.
+///
+/// [`retro_propulsion_effectiveness`] models base-pressure and plume-freestream
+/// interaction, which exists when the exhaust is opposed to the air-relative
+/// flow. A vehicle thrusting *along* its own velocity — every powered ascent —
+/// has no such interaction, so the correlation must not reduce its thrust.
+/// Both vectors must be expressed in the same frame; body or planet-inertial
+/// are both valid, because the test is frame-independent.
+pub fn retro_propulsion_plume_faces_freestream(
+    thrust: crate::domain::math::DVec3,
+    atmosphere_relative_velocity_mps: crate::domain::math::DVec3,
+) -> bool {
+    if thrust.length_squared() <= 0.0 || atmosphere_relative_velocity_mps.length_squared() <= 0.0 {
+        return false;
+    }
+    thrust.dot(atmosphere_relative_velocity_mps) < 0.0
 }
 
 /// Deployment parameters for one canopy (mortar gate + reefing + drag area).
@@ -299,6 +320,7 @@ impl ParachuteDeploymentState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::math::DVec3;
 
     const CRITICAL_DENSITY_M3: f64 = 6.6e16;
 
@@ -357,6 +379,35 @@ mod tests {
         let eff = retro_propulsion_effectiveness(100.0, 1.2, 0.25);
         assert!((eff - MIN_RETRO_EFFECTIVENESS).abs() < 1e-12);
         assert!(retro_propulsion_effectiveness(50.0, 1.0, 0.5) >= MIN_RETRO_EFFECTIVENESS);
+    }
+
+    #[test]
+    fn retro_plume_gate_requires_thrust_opposed_to_the_freestream() {
+        // Powered ascent: the plume points along the velocity, so no
+        // base-pressure interaction exists and the multiplier must stay 1.0.
+        assert!(!retro_propulsion_plume_faces_freestream(
+            DVec3::new(0.0, 900_000.0, 0.0),
+            DVec3::new(0.0, 600.0, 0.0),
+        ));
+        // Retro burn while descending: thrust points against the velocity.
+        assert!(retro_propulsion_plume_faces_freestream(
+            DVec3::new(0.0, 900_000.0, 0.0),
+            DVec3::new(0.0, -300.0, 0.0),
+        ));
+        // A plume exactly perpendicular to the flow is not opposed to it.
+        assert!(!retro_propulsion_plume_faces_freestream(
+            DVec3::new(0.0, -900_000.0, 0.0),
+            DVec3::new(300.0, 0.0, 0.0),
+        ));
+        // Degenerate inputs cannot carry a plume-flow interaction.
+        assert!(!retro_propulsion_plume_faces_freestream(
+            DVec3::ZERO,
+            DVec3::new(0.0, -300.0, 0.0),
+        ));
+        assert!(!retro_propulsion_plume_faces_freestream(
+            DVec3::new(0.0, -900_000.0, 0.0),
+            DVec3::ZERO,
+        ));
     }
 
     #[test]

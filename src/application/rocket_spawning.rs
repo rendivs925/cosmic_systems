@@ -2,6 +2,7 @@ use crate::application::launch_tower::{
     diagonal_braces, perimeter_braces, service_arms, TowerLayout, TowerMember, PLATFORM_THICKNESS_M,
 };
 use crate::application::rocket_config::{RocketCatalog, VehicleSelection};
+use crate::domain::entities::planet::Planet;
 use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
@@ -70,6 +71,9 @@ struct LaunchSetup {
     geometry: RocketGeometry,
     dynamics: RocketDynamicsState,
     launch_site: LaunchSiteCoordinates,
+    /// Guidance targets for this site, including the geocentric-latitude
+    /// inclination the ascent plane can actually reach.
+    autopilot: RocketAutopilot,
     mass_properties: ActiveVehicleMassProperties,
     position_body_fixed_m: DVec3,
     terrain_normal_body_fixed: DVec3,
@@ -172,6 +176,7 @@ fn build_launch_setup(
         mass_properties.inertia_body,
         mass_properties.center_of_mass_m,
     );
+    let autopilot = autopilot_for_site(&launch_site, &earth);
     LaunchSetup {
         rocket,
         final_stage_fairing_mass_kg,
@@ -179,11 +184,24 @@ fn build_launch_setup(
         geometry,
         dynamics,
         launch_site,
+        autopilot,
         mass_properties,
         position_body_fixed_m,
         terrain_normal_body_fixed: terrain_sample.normal,
         pad_north_body_fixed,
     }
+}
+
+/// Autopilot whose target inclination is the site's **geocentric** latitude.
+///
+/// A due-east launch reaches an orbital inclination equal to the geocentric
+/// latitude, because the orbit plane contains the radial position vector.
+/// WGS-84 geodetic latitude is not that value: Starbase is 25.9971° geodetic
+/// but 25.8458° geocentric. The conversion goes through the one authoritative
+/// geodetic-to-terrain-latitude function rather than a second formula.
+fn autopilot_for_site(site: &LaunchSiteCoordinates, planet: &Planet) -> RocketAutopilot {
+    let (terrain_latitude_deg, _) = geodetic_to_terrain_lat_lon(site, planet);
+    RocketAutopilot::for_launch_site(terrain_latitude_deg)
 }
 
 /// Spawn the authoritative rocket entity: physical state, flight-support state,
@@ -214,7 +232,7 @@ fn spawn_rocket_core(commands: &mut Commands, setup: &LaunchSetup) -> Entity {
         AerodynamicForces::default(),
         MaxQTracker::default(),
         RocketCommands::default(),
-        RocketAutopilot::for_launch_site(f64::from(setup.launch_site.latitude_deg)),
+        setup.autopilot.clone(),
         TerrainCollisionState::default(),
         // The vehicle spawns standing on the pad: the resting-contact
         // constraint holds it there until thrust exceeds weight (real physics
@@ -1138,6 +1156,33 @@ mod tests {
     };
     use bevy::camera::primitives::MeshAabb;
     use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+    #[test]
+    fn autopilot_targets_the_geocentric_site_latitude() {
+        // A due-east launch from a WGS-84 geodetic latitude cannot reach an
+        // orbit inclined at that latitude: the orbit plane contains the radial
+        // position vector, whose latitude is geocentric. Starbase is the
+        // clearest case (25.9971 geodetic, 25.8458 geocentric).
+        let earth = PlanetFactory::create_by_id(&CelestialBodyId::earth()).unwrap();
+        let starbase = PredefinedLaunchSite::Starbase.coordinates();
+        let autopilot = autopilot_for_site(&starbase, &earth);
+        let (geocentric_deg, _) = geodetic_to_terrain_lat_lon(&starbase, &earth);
+        let targeted_deg = autopilot.target_orbit.target_inclination_rad.to_degrees();
+
+        assert!(
+            (targeted_deg - geocentric_deg).abs() < 1e-9,
+            "target {targeted_deg} must be the geocentric latitude {geocentric_deg}"
+        );
+        let geodetic_deg = f64::from(starbase.latitude_deg);
+        assert!(
+            (geodetic_deg - geocentric_deg).abs() > 0.1,
+            "this site must expose the datum difference the regression guards"
+        );
+        assert!(
+            targeted_deg < geodetic_deg,
+            "geocentric latitude is always poleward of geodetic on an oblate body"
+        );
+    }
 
     #[test]
     fn procedural_pad_is_geodetically_anchored_and_presentation_only() {

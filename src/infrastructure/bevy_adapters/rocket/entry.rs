@@ -6,8 +6,8 @@ use super::components::{
 use super::events::CommsBlackoutEvent;
 use crate::domain::services::entry_physics::{
     capped_tps_recession_m, comms_blackout_active, convective_heat_flux_w_m2, electron_density_m3,
-    radiative_heat_flux_w_m2, retro_propulsion_effectiveness, tps_mass_loss_kg,
-    tps_recession_rate_mps,
+    radiative_heat_flux_w_m2, retro_propulsion_effectiveness,
+    retro_propulsion_plume_faces_freestream, tps_mass_loss_kg, tps_recession_rate_mps,
 };
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
@@ -241,12 +241,13 @@ pub fn compute_parachute_forces(
 pub fn compute_retro_propulsion(
     config: Res<EntryPhysicsConfig>,
     mut rocket_query: Query<(
+        &RocketPhysicsState,
         &RocketFlightConditions,
         &RocketPropulsion,
         &mut RetroPropulsionEffect,
     )>,
 ) {
-    for (conditions, propulsion, mut retro) in rocket_query.iter_mut() {
+    for (rocket, conditions, propulsion, mut retro) in rocket_query.iter_mut() {
         // Default each tick; re-derived below so state never goes stale
         // (config toggles, Mach drops below threshold, engines shut down).
         let mut multiplier = 1.0;
@@ -262,7 +263,14 @@ pub fn compute_retro_propulsion(
                         throttle,
                         conditions.ambient_pressure_pa,
                     );
-                    if thrust_body.length_squared() > 0.0 {
+                    // The base-pressure correlation only exists when the plume
+                    // faces the oncoming flow. A powered ascent thrusts along
+                    // its velocity and must keep its full rated thrust.
+                    let thrust_inertial = rocket.dynamics.orientation * thrust_body;
+                    if retro_propulsion_plume_faces_freestream(
+                        thrust_inertial,
+                        conditions.atmosphere_relative_velocity_mps,
+                    ) {
                         multiplier = retro_propulsion_effectiveness(
                             mach,
                             config.retro_propulsion_mach_threshold,
@@ -274,5 +282,114 @@ pub fn compute_retro_propulsion(
         }
 
         retro.thrust_multiplier = multiplier;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::math::{DMat3, DQuat, DVec3};
+    use crate::domain::services::atmosphere::FlightConditions;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::infrastructure::bevy_adapters::rocket::components::BoosterAttachmentState;
+    use bevy::prelude::{App, Update};
+
+    /// A supersonic, full-throttle vehicle sample whose air-relative velocity
+    /// points along `velocity_mps` in the inertial frame. Identity attitude
+    /// puts body +Y on inertial +Y.
+    fn supersonic_app(velocity_mps: DVec3) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(EntryPhysicsConfig::default());
+        app.add_systems(Update, compute_retro_propulsion);
+
+        let vehicle = crate::domain::entities::rocket::Rocket::falcon9_test_fixture();
+        let propellant = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let conditions = FlightConditions {
+            altitude_m: 11_000.0,
+            temperature_k: 216.65,
+            ambient_pressure_pa: 22_632.0,
+            density_kg_m3: 0.3639,
+            speed_of_sound_mps: 295.0,
+            atmosphere_relative_velocity_mps: velocity_mps,
+            airspeed_mps: velocity_mps.length(),
+            mach_number: velocity_mps.length() / 295.0,
+            dynamic_pressure_pa: 0.5 * 0.3639 * velocity_mps.length_squared(),
+        };
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketPhysicsState {
+                    dynamics: RocketDynamicsState::new(
+                        DVec3::new(0.0, 6.371e6, 0.0),
+                        velocity_mps,
+                        DQuat::IDENTITY,
+                        549_000.0,
+                        DMat3::IDENTITY,
+                        DVec3::ZERO,
+                    ),
+                },
+                RocketFlightConditions::from_sample(conditions),
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg: propellant,
+                    booster_attachment: BoosterAttachmentState::Detached,
+                    throttle: 1.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 10.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                RetroPropulsionEffect::default(),
+            ))
+            .id();
+
+        (app, entity)
+    }
+
+    fn multiplier(app: &mut App, entity: Entity) -> f64 {
+        app.update();
+        app.world()
+            .get::<RetroPropulsionEffect>(entity)
+            .expect("retro effect")
+            .thrust_multiplier
+    }
+
+    #[test]
+    fn powered_ascent_keeps_full_thrust_above_the_mach_threshold() {
+        // Thrust along the velocity is not a retro-propulsion interaction. The
+        // pre-gate code reduced ascent thrust by the base-pressure correlation
+        // purely because Mach exceeded 1.2.
+        let velocity = DVec3::new(0.0, 900.0, 0.0);
+        let (mut app, entity) = supersonic_app(velocity);
+        assert_eq!(multiplier(&mut app, entity), 1.0);
+    }
+
+    #[test]
+    fn retro_burn_applies_the_base_pressure_correlation() {
+        // Moving up while thrusting down: the plume faces the freestream.
+        let velocity = DVec3::new(0.0, -900.0, 0.0);
+        let (mut app, entity) = supersonic_app(velocity);
+        let applied = multiplier(&mut app, entity);
+        let expected = retro_propulsion_effectiveness(900.0 / 295.0, 1.2, 0.1);
+        assert!(
+            (applied - expected).abs() < 1e-12,
+            "retro burn must apply the correlation: {applied} vs {expected}"
+        );
+        assert!(applied < 1.0);
+    }
+
+    #[test]
+    fn subsonic_flight_keeps_full_thrust() {
+        let velocity = DVec3::new(0.0, -200.0, 0.0);
+        let (mut app, entity) = supersonic_app(velocity);
+        assert_eq!(multiplier(&mut app, entity), 1.0);
     }
 }
