@@ -43,7 +43,7 @@ pub use ascent::{
 };
 pub use attitude::{
     attitude_from_direction, banked_attitude_from_direction, pitch_axis_from_reference,
-    prograde_attitude,
+    prograde_attitude, roll_preserving_attitude_from_direction,
 };
 pub use boostback::{
     boostback_guidance, BoostbackCommand, BOOSTBACK_COMPLETE_DISTANCE_M,

@@ -22,7 +22,11 @@ impl Default for ActuationLimits {
     fn default() -> Self {
         Self {
             max_throttle_slew_per_s: 2.0,
-            max_rcs_torque_nm: 5.0e7,
+            // Representative physical cluster scale (a few kN of thrust at a
+            // few metres), not the 5e7 control authority the old roll-slew
+            // target required. See SC-04 in
+            // docs/scientific_correctness_audit.md.
+            max_rcs_torque_nm: 5.0e3,
             max_gimbal_deflection_rad: 5.0_f32.to_radians(),
         }
     }

@@ -138,21 +138,22 @@ trench corner, hardstand/trench geometry that does not scale with very small
 vehicles, faceted crowns at extreme close range, and sparse vegetation at 600 m.
 
 A separate scientific-correctness track has been opened and is recorded in
-`docs/scientific_correctness_audit.md`. It found and fixed six defects — the
+`docs/scientific_correctness_audit.md`. It found and fixed seven defects — the
 retro-propulsion correlation being applied to powered ascents, orbit insertion
 targeting the WGS-84 geodetic latitude instead of the geocentric one, orbital
 inclination being measured about the geometric pole instead of the rotation
 axis, the Falcon 9 catalog carrying 5.4 g of thrust-to-weight on legacy test
 masses (now public Block 5 masses, 1.41 g), a closed-loop insertion law that
 started its trim before the apsis and cycled the upper stage's ignition budget
-without circularizing, and an undefined body lateral-axis convention whose
-static-margin comment described the opposite sign — and records two further
-audited items: handedness (which led to the third defect) and per-thruster RCS
-allocation. A measured A/B shows the ascent needs at least ~0.5 MN·m per RCS
-axis while a physical upper-stage cluster provides ~1e3 N·m, so a thruster model
-requires a control-authority review first. A headless Falcon 9 ascent now
-reaches a 200.7 x 200.0 km orbit (e = 0.00005) with about 18 t of propellant
-left. None of this closes a roadmap task.
+without circularizing, an undefined body lateral-axis convention whose
+static-margin comment described the opposite sign, and an ascent attitude target
+that commanded a ~4 rad roll slew at liftoff and forced a 5e7 N·m RCS clamp —
+and records two further audited items: handedness (which led to the third
+defect) and per-thruster RCS allocation. Preserving the pad roll cut the RCS
+requirement to 5e3 N·m, so the per-thruster model can now be built at a physical
+authority. A headless Falcon 9 ascent reaches a 200.85 x 199.24 km orbit
+(e = 0.00012) with about 18 t of propellant left. None of this closes a roadmap
+task.
 
 ## How do we know it works?
 

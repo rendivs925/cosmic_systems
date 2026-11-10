@@ -18,7 +18,7 @@ least one test, not runtime-verified flight.
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **GAP — scalar clamp; measured ~0.5 MN·m authority blocker** |
+| SC-04 | Per-thruster RCS allocation | **PARTIAL — roll fix cut the authority to 5e3 N·m; thruster model still a gap** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
@@ -177,45 +177,49 @@ minimum-impulse quantization. The controller gives gimbals the pitch/yaw
 command and RCS the remainder including roll; grid fins, when fitted, are mixed
 separately.
 
-**Verdict.** GAP, with a measured blocker. The vehicle has torque authority on
-three axes but not a thruster-level model. Landing and coast burns are not
-sensitive to thruster placement, and an asymmetric or failed thruster cannot be
-represented.
+**Verdict.** GAP for the thruster model; the control-authority blocker is
+**resolved**. The vehicle has torque authority on three axes but not a
+thruster-level model. Landing and coast burns are not sensitive to thruster
+placement, and an asymmetric or failed thruster cannot be represented.
 
-**2026-11-09 measurement — the gap is coupled to control authority.** A direct
-A/B on the headless Starbase ascent lowered `max_rcs_torque_nm` and flew 900 s:
+**Root cause of the authority demand (2026-11-09/10).** Lowering
+`max_rcs_torque_nm` on the old code made the ascent fail: 2.0e4 lost control at
+~T+145 s, 1.0e5 cut at 100 km and only 1,873 m/s, and 5.0e5 was the first stable
+case. Instrumenting the fixed tick showed a 4.07 rad attitude error at t=0 with
+the engine still off and a 38 MN·m torque command. The ascent guidance used
+`attitude_from_direction`, a shortest-arc rotation from body +Y to the target
+direction that leaves **roll arbitrary**. The pad attitude from
+`orientation_from_up_and_heading` has a specific roll, so the guidance commanded
+a ~233° roll slew at liftoff. The huge RCS clamp existed to execute that slew.
 
-| per-axis clamp, N·m | result at T+900 s |
-| --- | --- |
-| 5.0e7 (current) | cut to `OrbitInsertion` at 137.77 km, 7,823 m/s |
-| 5.0e6 | cut to `OrbitInsertion` at 137.77 km, 7,823 m/s |
-| 1.0e6 | cut to `OrbitInsertion` at 137.74 km, 7,823 m/s |
-| 5.0e5 | cut to `OrbitInsertion` at 137.67 km, 7,824 m/s |
-| 1.0e5 | ascent cut at 100.0 km at only 1,873 m/s — a suborbital lob |
-| 2.0e4 | loss of control at ~T+145 s, `Reentry` mode, divergent state |
+**Fix.** `roll_preserving_attitude_from_direction(direction, current)` rotates
+the current attitude by the shortest arc from its current longitudinal axis to
+the new direction, so roll is preserved and the relative rotation has no
+component about body +Y. Ascent guidance now uses it for the vertical hold, the
+gravity turn, the radial-velocity trim, and the unreachable-heading fallback. A
+launch vehicle without a roll program should not roll at liftoff.
 
-The ascent therefore needs at least ~5e5 N·m per axis. A representative
-upper-stage cold-gas set (a few hundred newtons at a few metres) provides
-~1e3 N·m, two to three orders of magnitude less. Replacing the clamp with a
-physical thruster cluster without changing the attitude law would break the
-validated flight. The `5e7` clamp is a control authority, not a physical RCS
-budget; its magnitude was chosen to make the PID loop stable, not derived from
-thruster hardware.
+**Measured after the fix.** With the roll-preserving target, the initial
+attitude error is ~1e-16 rad and the ascent reaches the target apoapsis with
+`max_rcs_torque_nm` as low as 100 N·m (and 0 still reaches the ascent cut
+because the gimbals carry pitch/yaw and no roll is commanded). The full 5,400 s
+insertion was flown at 2.0e4 and 5.0e3 N·m; both circularize. The default is now
+**5.0e3 N·m**, a representative physical cluster scale (a few kN of thrust at a
+few metres), and the final orbit is 200.85 × 199.24 km (e = 0.00012). The
+earlier 5e7 authority was an artifact of the roll slew, not a physical RCS
+budget. Validation scope: the 5e3 authority is flown through ascent and
+insertion and exercised by the landing/recovery tests; a complete booster
+recovery flight was not re-flown in this change.
 
-**Ordered prerequisite.** SC-04 cannot be closed by adding thrusters alone. The
-control-authority review must come first:
+**Baselines.** `ascent-gravity-turn` and `leo-insertion-safe` were re-recorded
+through `scripts/regression/save_baseline.sh` because the attitude target and
+the actuator limit changed. `ascent` (the first 4 s, before the turn) is
+unchanged. The baseline README records the reason.
 
-1. Why does the ascent attitude loop require ~0.5 MN·m? Check the PID gains
-   (normalized to the stack mass), the gimbal/RCS split, the gimbal torque
-   authority actually used during ascent, and the ascent attitude schedule.
-2. Size a physical cluster from real thruster data, then re-run the ascent with
-   the same authority envelope.
-3. Only then do placement, failure, propellant cost, and minimum-impulse
-   quantization carry physical meaning.
-
-Implementing a per-thruster model at the current authority would require
-MN-class "thrusters" — fake hardware that does not improve realism. That is why
-this item is recorded as a measured gap rather than implemented.
+**Still open.** The per-thruster model itself: placement, failure, propellant
+draw, and minimum-impulse quantization. The authority is now physically sized,
+so the next change can add a representative cluster at this envelope without
+carrying MN-class fake hardware.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -267,15 +271,17 @@ same test guards the retro overshoot at periapsis.
 | event | t | state |
 | --- | --- | --- |
 | stage 1 separation | 144.2 s | 40,600 kg shed, 112,898 kg upper stage |
-| ascent cut | 448.1 s | 137.77 km, 7,823 m/s, apo 200.44 km, peri 67.59 km |
-| circularization burn | 1,710.3–1,711.5 s | 281 kg consumed, one ignition |
-| insertion accepted | 1,711.5 s | **200.72 × 199.98 km, e = 0.00005** |
-| end of run | 5,400 s | 200.65 × 200.05 km, 23,919 kg |
+| ascent cut | 448.2 s | 137.09 km, 7,824.6 m/s, apo 200.82 km, peri 68.60 km |
+| circularization burn | 1,727.7–1,728.9 s | 276 kg consumed, one ignition |
+| insertion accepted | 1,728.9 s | **200.85 × 199.24 km, e = 0.00012** |
+| end of run | 5,400 s | 200.87 × 199.22 km, 23,901 kg |
 
 The accepted state satisfies the full predicate: both apsides within ±25 km,
 eccentricity ≤ 0.02, and the plane within ±2° of the Starbase geocentric
 inclination (about the physical rotation axis, SC-08). The upper stage finishes
-with about 18.0 t of propellant and one ignition still available.
+with about 18.0 t of propellant and one ignition still available. The slightly
+later burn and 0.8 km apsis spread, compared with the pre-SC-04 5e7 run, are the
+cost of the now-physical 5e3 N·m RCS authority; SC-05 still closes.
 
 **Tests.** Four ECS guidance tests pin the law: a prograde burn at the apsis, the
 running-burn latch away from the apsis, no burn before the apsis, and no burn on
@@ -432,12 +438,11 @@ Record the choice in the consumer's doc comment.
 
 ## Next steps, in order of physical impact
 
-1. **SC-04 — RCS allocation, after a control-authority review.** The measured
-   A/B shows the ascent needs ~0.5 MN·m per axis; a physical cluster provides
-   ~1e3 N·m. Review the PID/gimbal/RCS split first, then size and integrate a
-   physical thruster set. A torque-level model still cannot represent placement,
-   failure, or propellant cost, and is the reason a plane error cannot be
-   trimmed.
+1. **SC-04 — add the per-thruster model at the new 5e3 N·m envelope.** The
+   roll-slew fix removed the ~0.5 MN·m requirement, so a representative cluster
+   is now physically sized. Add thruster placement, torque allocation,
+   propellant draw, failure, and minimum-impulse quantization; the torque-level
+   model still cannot represent those or trim a plane error.
 2. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
@@ -449,7 +454,7 @@ Record the choice in the consumer's doc comment.
 ## Validation
 
 The gate for this track is the project gate. Counts are the post-change values;
-the previous floor was 1,215 with `dem` and 1,163 without.
+the previous floor was 1,216 with `dem` and 1,164 without.
 
 | check | result |
 | --- | --- |
@@ -457,8 +462,8 @@ the previous floor was 1,215 with `dem` and 1,163 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,216 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,164 passed, 2 ignored |
+| `cargo test --features dem --lib` | 1,217 passed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,165 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
-| headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut on the 200.4 km apoapsis, one 1.2 s circularization burn, 200.7 x 200.0 km (e = 0.00005) accepted at T+1,711.5 s, stable through 90 min |
-| RCS authority A/B (900 s each) | 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off to `OrbitInsertion` near 137.7 km; 1.0e5 cuts at 100 km and 1,873 m/s; 2.0e4 loses control at ~T+145 s |
+| headless Falcon 9 ascent | ascent cut on the 200.8 km apoapsis at T+448.2 s, one 1.2 s circularization burn, 200.85 x 199.24 km (e = 0.00012) accepted at T+1,728.9 s, stable through 90 min with the 5e3 N·m RCS authority |
+| RCS authority A/B | before the roll fix: 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s. After the roll fix: 5.0e3 (new default) and 2.0e4 both circularize at ~200 x 199 km; 100 N·m still reaches the ascent cut |

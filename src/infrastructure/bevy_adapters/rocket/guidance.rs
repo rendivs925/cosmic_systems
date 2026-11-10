@@ -4,8 +4,9 @@ use crate::domain::services::guidance::{
     attitude_from_direction, banked_attitude_from_direction, boostback_guidance,
     default_surface_landing_target, gravity_turn_direction_engaged, pitch_axis_from_reference,
     prograde_ascending_node_launch_heading, prograde_attitude, reentry_bank_angle,
-    reentry_bank_angle_enhanced, target_surface_range_errors_m, terminal_landing_guidance,
-    transfer_burn_phase, AutopilotMode, DescentGuidanceConfig, TransferBurnPhase,
+    reentry_bank_angle_enhanced, roll_preserving_attitude_from_direction,
+    target_surface_range_errors_m, terminal_landing_guidance, transfer_burn_phase, AutopilotMode,
+    DescentGuidanceConfig, TransferBurnPhase,
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
@@ -340,19 +341,24 @@ pub fn guidance_system(
                         // perpendicular pitch axis is always defined.
                         let pitch_axis = pitch_axis_from_reference(up_dir, heading.direction_pci)
                             .expect("a horizontal ascent heading has a pitch axis");
-                        attitude_from_direction(gravity_turn_direction_engaged(
-                            &autopilot.ascent_profile,
-                            up_dir,
-                            pitch_axis,
-                            altitude_m,
-                            autopilot.time_since_liftoff_s,
-                            autopilot.ascent_pitch_over_engaged,
-                        ))
+                        roll_preserving_attitude_from_direction(
+                            gravity_turn_direction_engaged(
+                                &autopilot.ascent_profile,
+                                up_dir,
+                                pitch_axis,
+                                altitude_m,
+                                autopilot.time_since_liftoff_s,
+                                autopilot.ascent_pitch_over_engaged,
+                            ),
+                            rocket.dynamics.orientation,
+                        )
                     }
                     // A polar site or unreachable inclination has no safe
                     // launch azimuth. Hold vertical rather than substitute a
                     // world axis and silently enter a wrong ascent plane.
-                    Err(_) => attitude_from_direction(up_dir),
+                    Err(_) => {
+                        roll_preserving_attitude_from_direction(up_dir, rocket.dynamics.orientation)
+                    }
                 };
                 commands.throttle_cmd = 1.0;
 
@@ -377,8 +383,10 @@ pub fn guidance_system(
                             .clamp(-RADIAL_TILT_LIMIT, RADIAL_TILT_LIMIT);
                         let horizontal_dir =
                             (inertial_velocity_mps - up_dir * radial_mps).normalize();
-                        commands.target_attitude =
-                            attitude_from_direction((horizontal_dir + up_dir * tilt).normalize());
+                        commands.target_attitude = roll_preserving_attitude_from_direction(
+                            (horizontal_dir + up_dir * tilt).normalize(),
+                            rocket.dynamics.orientation,
+                        );
                     }
                 }
 

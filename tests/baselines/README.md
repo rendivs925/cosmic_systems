@@ -19,6 +19,18 @@ REGRESSION_TEST_FILTER=determinism_regression_tests::<test-name> \
 
 Review the fixture audit metadata, state samples, and hash chain before commit.
 
+## 2026-11-10 launch-roll and RCS-authority update
+
+`ascent-gravity-turn` and `leo-insertion-safe` were re-recorded after ascent
+guidance was changed to preserve the vehicle's roll instead of commanding an
+arbitrary shortest-arc roll at liftoff. The old target demanded a ~4.07 rad roll
+slew while the engine was still off, which is why the RCS clamp had been set to
+5e7 N·m. The default is now 5e3 N·m, a representative physical cluster scale.
+`ascent` (the first 4 s, before the turn) is unchanged. No force, propulsion, or
+integration equation changed; the attitude target and the actuator limit did.
+The headless Starbase ascent still reaches insertion (200.85 x 199.24 km,
+e = 0.00012).
+
 ## 2026-11-09 inclination-reference update
 
 `leo-insertion-safe` was re-recorded after orbital inclination was corrected to
