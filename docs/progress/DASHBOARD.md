@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-09.
-Last code checkpoint: `16e3387` (2026-11-10).
+Last code checkpoint: `0e333b0` (2026-11-10).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,15 +59,15 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 16e3387 |
-| `cargo check --all-targets --features dem` | PASS | 16e3387 |
-| `cargo check --no-default-features` | PASS | 16e3387 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 16e3387 |
-| `cargo test --features dem --lib` | 1216 passed, 0 failed, 2 ignored | 16e3387 |
-| `cargo test --no-default-features --lib` | 1164 passed, 0 failed, 2 ignored | 16e3387 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 16e3387 |
-| `cargo build --release --features dem` | PASS | 16e3387 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 16e3387 |
+| `cargo fmt --check` | PASS | 0e333b0 |
+| `cargo check --all-targets --features dem` | PASS | 0e333b0 |
+| `cargo check --no-default-features` | PASS | 0e333b0 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 0e333b0 |
+| `cargo test --features dem --lib` | 1217 passed, 0 failed, 2 ignored | 0e333b0 |
+| `cargo test --no-default-features --lib` | 1165 passed, 0 failed, 2 ignored | 0e333b0 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 0e333b0 |
+| `cargo build --release --features dem` | PASS | 0e333b0 |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 0e333b0 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

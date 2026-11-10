@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-10. Last code checkpoint: `16e3387`.
+Snapshot: 2026-11-10. Last code checkpoint: `0e333b0`.
 
 ---
 
@@ -161,8 +161,8 @@ task.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1216 passed, 2 ignored
-cargo test --no-default-features --lib   # 1164 passed, 2 ignored
+cargo test --features dem --lib          # 1217 passed, 2 ignored
+cargo test --no-default-features --lib   # 1165 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
