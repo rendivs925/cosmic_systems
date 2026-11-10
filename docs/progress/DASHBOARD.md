@@ -63,8 +63,8 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 990e383 |
 | `cargo check --no-default-features` | PASS | 990e383 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 990e383 |
-| `cargo test --features dem --lib` | 1215 passed, 0 failed, 2 ignored | 990e383 |
-| `cargo test --no-default-features --lib` | 1163 passed, 0 failed, 2 ignored | 990e383 |
+| `cargo test --features dem --lib` | 1216 passed, 0 failed, 2 ignored | 990e383 |
+| `cargo test --no-default-features --lib` | 1164 passed, 0 failed, 2 ignored | 990e383 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 990e383 |
 | `cargo build --release --features dem` | PASS | 990e383 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 990e383 |
@@ -142,5 +142,7 @@ test masses, now public Block 5 masses at 1.41 g; an insertion trim that started
 before the apsis and consumed the upper stage's ignition budget without
 circularizing; and an undefined body lateral-axis convention whose static-margin
 comment described the opposite sign) and two audited items (frame handedness and
-per-thruster RCS allocation). A headless Falcon 9 flight now circularizes at
-200.7 x 200.0 km.
+per-thruster RCS allocation). The RCS gap now has a measured blocker: the ascent
+needs ~0.5 MN·m per axis while a physical cluster gives ~1e3 N·m, so the control
+law must be reviewed before thrusters can be sized. A headless Falcon 9 flight
+now circularizes at 200.7 x 200.0 km.

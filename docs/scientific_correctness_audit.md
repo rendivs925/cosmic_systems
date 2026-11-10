@@ -18,7 +18,7 @@ least one test, not runtime-verified flight.
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **GAP — no thruster model; scalar per-axis clamp** |
+| SC-04 | Per-thruster RCS allocation | **GAP — scalar clamp; measured ~0.5 MN·m authority blocker** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
@@ -177,10 +177,45 @@ minimum-impulse quantization. The controller gives gimbals the pitch/yaw
 command and RCS the remainder including roll; grid fins, when fitted, are mixed
 separately.
 
-**Verdict.** Documented, honest limitation — the vehicle has torque authority on
-three axes but not a thruster-level model. Landing and coast burns are therefore
-not sensitive to thruster placement, and an asymmetric or failed thruster
-cannot be represented.
+**Verdict.** GAP, with a measured blocker. The vehicle has torque authority on
+three axes but not a thruster-level model. Landing and coast burns are not
+sensitive to thruster placement, and an asymmetric or failed thruster cannot be
+represented.
+
+**2026-11-09 measurement — the gap is coupled to control authority.** A direct
+A/B on the headless Starbase ascent lowered `max_rcs_torque_nm` and flew 900 s:
+
+| per-axis clamp, N·m | result at T+900 s |
+| --- | --- |
+| 5.0e7 (current) | cut to `OrbitInsertion` at 137.77 km, 7,823 m/s |
+| 5.0e6 | cut to `OrbitInsertion` at 137.77 km, 7,823 m/s |
+| 1.0e6 | cut to `OrbitInsertion` at 137.74 km, 7,823 m/s |
+| 5.0e5 | cut to `OrbitInsertion` at 137.67 km, 7,824 m/s |
+| 1.0e5 | ascent cut at 100.0 km at only 1,873 m/s — a suborbital lob |
+| 2.0e4 | loss of control at ~T+145 s, `Reentry` mode, divergent state |
+
+The ascent therefore needs at least ~5e5 N·m per axis. A representative
+upper-stage cold-gas set (a few hundred newtons at a few metres) provides
+~1e3 N·m, two to three orders of magnitude less. Replacing the clamp with a
+physical thruster cluster without changing the attitude law would break the
+validated flight. The `5e7` clamp is a control authority, not a physical RCS
+budget; its magnitude was chosen to make the PID loop stable, not derived from
+thruster hardware.
+
+**Ordered prerequisite.** SC-04 cannot be closed by adding thrusters alone. The
+control-authority review must come first:
+
+1. Why does the ascent attitude loop require ~0.5 MN·m? Check the PID gains
+   (normalized to the stack mass), the gimbal/RCS split, the gimbal torque
+   authority actually used during ascent, and the ascent attitude schedule.
+2. Size a physical cluster from real thruster data, then re-run the ascent with
+   the same authority envelope.
+3. Only then do placement, failure, propellant cost, and minimum-impulse
+   quantization carry physical meaning.
+
+Implementing a per-thruster model at the current authority would require
+MN-class "thrusters" — fake hardware that does not improve realism. That is why
+this item is recorded as a measured gap rather than implemented.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -342,14 +377,22 @@ rotation axis. Consequences:
 falls back to the geometric pole when a body has no usable angular velocity. It
 is now the reference for `orbital_elements_from_state_in_reference_frame`
 (telemetry, guidance and insertion checks). The geometric pole stays the
-reference for `planet_inertial_enu_basis` and the launch-heading formula, which
-empirically produce the correct prograde plane.
+reference for `planet_inertial_enu_basis` and the launch-heading formula. That
+combination is not a convention accident: the new test
+`launch_heading_achieves_the_target_inclination_about_the_rotation_axis` proves
+that a horizontal launch along the returned heading produces an orbit whose
+angular momentum is the requested angle from the **rotation** axis, for targets
+from the site latitude through polar and retrograde, even though the local frame
+is built from the geometric pole.
 
 **Tests.**
 - `rotation_axis_matches_the_surface_velocity_sense`: the axis is exactly
   antiparallel to the pole and reproduces `surface_velocity = |ω|·(axis × r)`.
 - `inclination_is_measured_about_the_rotation_axis`: a circular equatorial
   prograde state reads 0° about the axis and 180° about the pole.
+- `launch_heading_achieves_the_target_inclination_about_the_rotation_axis`:
+  targets 28.5°, 45°, 97° and 135° from a 28.5° site all reach the requested
+  rotation-axis inclination.
 - The two ascent baselines are unchanged; the system-level insertion test still
   reaches `Orbit` and cuts thrust.
 
@@ -366,11 +409,35 @@ no cutoff law. That was SC-05, now closed; the final orbit is 200.7 × 200.0 km.
 
 ---
 
+## Pole convention checklist
+
+Every consumer of a planet pole must state which one it needs. The authorities
+are in `reference_frames`; this table is the review checklist for new code.
+
+| consumer | reference | reason |
+| --- | --- | --- |
+| `planet_inertial_enu_basis`, `prograde_ascending_node_launch_heading` | geometric pole (`planet_inertial_spin_axis`) | defines east `= up × pole` and north toward the pole; the returned azimuth still reaches the requested inclination about the rotation axis (tested) |
+| `surface_velocity_in_planet_inertial` | rotation sense from the negated transformed ICRF ω | eastward surface velocity |
+| `orbital_elements_from_state_in_reference_frame`, insertion acceptance, plane-change Δv | physical rotation axis (`planet_inertial_rotation_axis`) | inclination is defined about the angular-momentum axis by the right-hand rule |
+| `planet_equatorial_reference_x_axis` | body-fixed +X transformed at the current orientation | in-plane phase origin for node/periapsis; it is a phase convention, not an inclination reference |
+| J2 acceleration, zonal harmonics | geometric pole | J2 is symmetric under axis reversal, so the sign is irrelevant; the full spherical-harmonic field is evaluated in the body-fixed frame, not from a pole |
+| sky/planet presentation, surface maps | body-fixed rotation | visual state only; never feeds orbital elements or guidance |
+
+The rule for new consumers: if the quantity is an orbital element or an
+angular-momentum comparison, use the rotation axis; if it is a local
+east/north/up frame or an axisymmetric gravity term, use the geometric pole.
+Record the choice in the consumer's doc comment.
+
+---
+
 ## Next steps, in order of physical impact
 
-1. **SC-04 — RCS allocation.** A torque-level model cannot represent thruster
-   placement, failure, or propellant cost. This is the largest remaining gap in
-   the attitude loop, and the reason a plane error cannot be trimmed.
+1. **SC-04 — RCS allocation, after a control-authority review.** The measured
+   A/B shows the ascent needs ~0.5 MN·m per axis; a physical cluster provides
+   ~1e3 N·m. Review the PID/gimbal/RCS split first, then size and integrate a
+   physical thruster set. A torque-level model still cannot represent placement,
+   failure, or propellant cost, and is the reason a plane error cannot be
+   trimmed.
 2. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
    explicitly dated snapshot) with a checksum, then promote the entry to
    `SourceVerified`, or state that the vehicle is permanently representative.
@@ -378,15 +445,11 @@ no cutoff law. That was SC-05, now closed; the final orbit is 200.7 × 200.0 km.
    slopes should be equal for the axisymmetric airframe, or whether the
    asymmetry represents a deliberate (and documented) fin/geometry choice.
    This changes aerodynamic torque, so it needs a baseline review.
-4. **Inclination convention checklist.** Every new consumer of a planet pole
-   must state whether it needs the geometric pole (local east/north, J2
-   symmetry) or the rotation axis (orbital elements, angular momentum). SC-08
-   was exactly that confusion.
 
 ## Validation
 
 The gate for this track is the project gate. Counts are the post-change values;
-the previous floor was 1,213 with `dem` and 1,161 without.
+the previous floor was 1,215 with `dem` and 1,163 without.
 
 | check | result |
 | --- | --- |
@@ -394,7 +457,8 @@ the previous floor was 1,213 with `dem` and 1,161 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,215 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,163 passed, 2 ignored |
+| `cargo test --features dem --lib` | 1,216 passed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,164 passed, 2 ignored |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
 | headless Falcon 9 ascent | 120 s reproducer bit-identical; ascent cut on the 200.4 km apoapsis, one 1.2 s circularization burn, 200.7 x 200.0 km (e = 0.00005) accepted at T+1,711.5 s, stable through 90 min |
+| RCS authority A/B (900 s each) | 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off to `OrbitInsertion` near 137.7 km; 1.0e5 cuts at 100 km and 1,873 m/s; 2.0e4 loses control at ~T+145 s |

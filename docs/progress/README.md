@@ -148,9 +148,11 @@ started its trim before the apsis and cycled the upper stage's ignition budget
 without circularizing, and an undefined body lateral-axis convention whose
 static-margin comment described the opposite sign — and records two further
 audited items: handedness (which led to the third defect) and per-thruster RCS
-allocation. A headless Falcon 9 ascent now reaches a 200.7 x 200.0 km orbit
-(e = 0.00005) with about 18 t of propellant left. None of this closes a roadmap
-task.
+allocation. A measured A/B shows the ascent needs at least ~0.5 MN·m per RCS
+axis while a physical upper-stage cluster provides ~1e3 N·m, so a thruster model
+requires a control-authority review first. A headless Falcon 9 ascent now
+reaches a 200.7 x 200.0 km orbit (e = 0.00005) with about 18 t of propellant
+left. None of this closes a roadmap task.
 
 ## How do we know it works?
 
@@ -158,8 +160,8 @@ task.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1215 passed, 2 ignored
-cargo test --no-default-features --lib   # 1163 passed, 2 ignored
+cargo test --features dem --lib          # 1216 passed, 2 ignored
+cargo test --no-default-features --lib   # 1164 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 

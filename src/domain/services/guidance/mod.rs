@@ -205,6 +205,34 @@ mod tests {
     }
 
     #[test]
+    fn launch_heading_achieves_the_target_inclination_about_the_rotation_axis() {
+        // The heading formula uses the geometric pole for the local ENU
+        // frame, but orbital inclination is measured about the physical
+        // rotation axis (SC-08). For a prograde body in the reflected solar
+        // frame that axis is the negative of the geometric pole. A horizontal
+        // launch along the returned heading must therefore produce an orbit
+        // whose angular momentum is `target` away from the rotation axis, not
+        // from the pole.
+        let spin_axis = DVec3::Z;
+        let rotation_axis = -spin_axis;
+        let latitude_rad = 28.5_f64.to_radians();
+        let position_m = DVec3::X * latitude_rad.cos() + spin_axis * latitude_rad.sin();
+
+        for target_deg in [28.5_f64, 45.0, 97.0, 135.0] {
+            let target = target_deg.to_radians();
+            let heading =
+                prograde_ascending_node_launch_heading(position_m, spin_axis, target).unwrap();
+            let h = position_m.cross(heading.direction_pci).normalize();
+            let achieved = h.dot(rotation_axis).clamp(-1.0, 1.0).acos();
+            assert!(
+                (achieved - target).abs() < 1e-9,
+                "target {target_deg} deg produced {:.6} deg about the rotation axis",
+                achieved.to_degrees()
+            );
+        }
+    }
+
+    #[test]
     fn polar_orbit_from_equator_launches_northbound() {
         let spin_axis = DVec3::Z;
         let position_m = DVec3::X;
