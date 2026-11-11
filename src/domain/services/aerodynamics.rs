@@ -28,11 +28,14 @@
 //! - X-plane flow angle: `α_x = atan2(−v_x, v_y)` in the body frame.
 //! - Z flow angle: `β_z = asin(v_z / |v|)` in the body frame.
 //! - Coefficients (analytic approximations, documented limits): constant base
-//!   drag `Cd = 0.3`, linear X normal `Cn_x = 1.5·α_x`, linear Z normal
-//!   `Cn_z = −0.8·β_z`. Tabulated data can replace these behind the same
-//!   interface. The two slopes differ although the body is axisymmetric; that
-//!   anisotropy is an analytic approximation, not a geometry result (see the
-//!   SC-03 residual in `docs/scientific_correctness_audit.md`).
+//!   drag `Cd = 0.3`, and the same linear normal-force slope in both lateral
+//!   planes, `Cn_x = 1.5·α_x` and `Cn_z = −1.5·β_z`. The airframe is
+//!   axisymmetric with no modelled fins, so the two lateral planes are
+//!   physically equivalent; equal slopes make the force and torque model
+//!   invariant under roll about the longitudinal axis. The previous `−0.8`
+//!   yaw-plane slope was an arbitrary anisotropy, not a geometry result. The
+//!   common magnitude retains the validated pitch-plane slope. Tabulated data
+//!   can replace these behind the same interface.
 //! - Drag opposes velocity. The X normal force acts along body +X projected
 //!   perpendicular to velocity; the Z force acts along `lift_dir × v̂` for
 //!   nose-first flow. Coefficient signs carry deflection direction.
@@ -83,14 +86,20 @@ pub fn angle_of_sideslip(body_velocity: DVec3) -> f64 {
     }
 }
 
+/// Common lateral normal-force slope, per radian. The airframe is
+/// axisymmetric, so both lateral planes must use this one value; the sign is
+/// carried by each plane's coefficient definition below.
+pub const LATERAL_NORMAL_FORCE_SLOPE_PER_RAD: f64 = 1.5;
+
 /// Analytic aerodynamic coefficients for the two lateral body axes:
 /// `(cd, cn_x, cn_z)` from the X-plane and Z-plane flow angles. `cn_x` scales
 /// the normal force along +X; `cn_z` scales the side force along `lift_dir × v̂`
 /// (body +Z for nose-first flow). Linear models; documented approximations.
+/// Both lateral slopes have the same magnitude by axisymmetry.
 pub fn aerodynamic_coefficients(alpha_rad: f64, beta_rad: f64) -> (f64, f64, f64) {
     let cd = 0.3;
-    let cn_x = 1.5 * alpha_rad;
-    let cn_z = -0.8 * beta_rad;
+    let cn_x = LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * alpha_rad;
+    let cn_z = -LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * beta_rad;
     (cd, cn_x, cn_z)
 }
 
@@ -245,6 +254,31 @@ mod tests {
     }
 
     const AREA: f64 = std::f64::consts::PI * 1.85 * 1.85; // ~10.75 m²
+
+    /// The airframe is axisymmetric, so a given flow angle must produce the
+    /// same lateral force magnitude in either plane. Rotating the same
+    /// body-relative flow by 90° about the longitudinal axis must not change
+    /// the force, i.e. the model is roll-invariant (SC-03/SC-04 audit).
+    #[test]
+    fn lateral_planes_have_equal_normal_force_slopes_by_axisymmetry() {
+        let angle_rad = 0.05_f64;
+        let speed_mps = 200.0;
+        let (_, cn_x, _) = aerodynamic_coefficients(angle_rad, 0.0);
+        let (_, _, cn_z) = aerodynamic_coefficients(0.0, angle_rad);
+        assert!((cn_x.abs() - cn_z.abs()).abs() < 1e-12);
+
+        let q = 20_000.0;
+        let x_plane_velocity = DVec3::new(-angle_rad.sin(), angle_rad.cos(), 0.0) * speed_mps;
+        let z_plane_velocity = DVec3::new(0.0, angle_rad.cos(), angle_rad.sin()) * speed_mps;
+        let (_, cn_x, _) = aerodynamic_coefficients(angle_of_attack(x_plane_velocity), 0.0);
+        let (_, _, cn_z) = aerodynamic_coefficients(0.0, angle_of_sideslip(z_plane_velocity));
+        let x_force = lift_force_body(q, cn_x, AREA, x_plane_velocity);
+        let z_force = side_force_body(q, cn_z, AREA, z_plane_velocity);
+        assert!(
+            (x_force.length() - z_force.length()).abs() < 1e-6,
+            "the two lateral planes must have equal force magnitude"
+        );
+    }
 
     #[test]
     fn dynamic_pressure_is_half_rho_v_squared() {
