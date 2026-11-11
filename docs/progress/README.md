@@ -50,12 +50,14 @@ because the chute model is per-body, and a wreck re-published a crash every fixe
 tick. Both are fixed and tested. The crash also exposed a spinning-contact energy
 pump: the old projection corrected the center of mass by the contact-point speed
 without an angular impulse and launched the wreck onto a 739 km arc. A
-linear-plus-angular contact impulse now keeps it on the surface. The return itself
-still does not land — the representative 15 t reserve is consumed by boostback,
-the scenario leaves the pad target unset, and a water crash resolves against the
-sea floor rather than the sea surface — so recovery remains IMPLEMENTED-tested,
-not flight-verified. What that does *not* claim is recorded in the audit: the
-cluster is representative, a failed-thruster flight was not flown, recovery is not
+linear-plus-angular contact impulse now keeps it on the surface. The stage now
+inherits the launch site and targets the rotating pad, but the return still does
+not land: it spins up to 209 rad/s before impact. The 15 t reserve is consumed by
+boostback, 25 t preserves insertion but still crashes, and 40 t breaks the ascent,
+so the committed reserve stays 15 t. A water crash also resolves against the sea
+floor rather than the sea surface. Recovery remains IMPLEMENTED-tested, not
+flight-verified. What that does *not* claim is recorded in the audit: the cluster
+is representative, a failed-thruster flight was not flown, recovery is not
 verified, and the insertion law still trims apsides only.
 
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
@@ -196,8 +198,8 @@ than a defect on the current trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1232 passed, 2 ignored
-cargo test --no-default-features --lib   # 1180 passed, 2 ignored
+cargo test --features dem --lib          # 1233 passed, 2 ignored
+cargo test --no-default-features --lib   # 1181 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -220,8 +222,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,232 domain and adapter
-tests pass (1,180 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,233 domain and adapter
+tests pass (1,181 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.

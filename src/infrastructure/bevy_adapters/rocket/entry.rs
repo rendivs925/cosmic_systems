@@ -306,6 +306,7 @@ mod tests {
     use super::*;
     use crate::domain::math::{DMat3, DQuat, DVec3};
     use crate::domain::services::atmosphere::FlightConditions;
+    use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
     use crate::domain::services::simulation_time::SimulationTime;
     use crate::infrastructure::bevy_adapters::rocket::components::BoosterAttachmentState;
@@ -415,8 +416,6 @@ mod tests {
     /// without gear still uses the per-body chute model.
     #[test]
     fn parachutes_skip_landing_gear_vehicles() {
-        use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
-
         fn descending_vehicle(app: &mut App, with_gear: bool) -> Entity {
             let velocity_mps = DVec3::new(0.0, -120.0, 0.0);
             let conditions = FlightConditions {

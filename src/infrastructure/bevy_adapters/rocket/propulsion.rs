@@ -14,6 +14,7 @@ use crate::domain::services::rocket_propulsion::{
     PARALLEL_BOOSTER_SEPARATION_DV_MPS, SEPARATION_UPPER_DV_MPS, SPENT_STAGE_RETRO_DV_MPS,
 };
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use bevy::camera::primitives::Aabb;
 use bevy::log::info;
 use bevy::math::DVec3;
@@ -43,6 +44,7 @@ pub fn propulsion_staging(
         &mut RocketPropulsion,
         Option<&AblationState>,
         Option<&RocketAutopilot>,
+        Option<&LaunchSiteCoordinates>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep() as f32;
@@ -55,6 +57,7 @@ pub fn propulsion_staging(
         mut propulsion,
         ablation,
         autopilot,
+        launch_site,
     ) in rocket_query.iter_mut()
     {
         propulsion.time_since_separation_s += dt;
@@ -267,6 +270,14 @@ pub fn propulsion_staging(
                 LandingScorecard::default(),
                 OrbitalElements::default(),
             ));
+            if let Some(launch_site) = launch_site {
+                // The recovery stage returns to the pad that launched it. The
+                // launch site is a body-fixed coordinate; guidance re-derives
+                // the inertial target every tick from the current body
+                // orientation, because a return flight spans enough time for
+                // the pad to move hundreds of kilometres.
+                commands.entity(spent_entity).insert(launch_site.clone());
+            }
             commands.entity(spent_entity).insert((
                 ThermalState::default(),
                 AblationState::default(),

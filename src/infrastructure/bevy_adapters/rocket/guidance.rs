@@ -10,12 +10,14 @@ use crate::domain::services::guidance::{
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
-    planet_equatorial_reference_x_axis, planet_inertial_rotation_axis, planet_inertial_spin_axis,
+    body_fixed_to_planet_inertial, geodetic_to_body_fixed, planet_equatorial_reference_x_axis,
+    planet_inertial_rotation_axis, planet_inertial_spin_axis,
 };
 use crate::domain::services::rocket_propulsion::{
     stage_available_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
+use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::ecs::query::QueryData;
@@ -123,6 +125,12 @@ pub struct GuidanceAccess {
     pub collision: &'static TerrainCollisionState,
     pub orbital: &'static OrbitalElements,
     pub commands: &'static mut RocketCommands,
+    /// Ground pad for a launch/return vehicle. Optional so isolated fixtures
+    /// that only exercise attitude laws do not need the component.
+    pub launch_site: Option<&'static LaunchSiteCoordinates>,
+    /// Moving-deck target. When present it owns the landing target; the
+    /// ground-pad update must not overwrite it.
+    pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
 }
 
 /// Mission guidance: computes the target attitude from the mission phase and
@@ -143,6 +151,8 @@ pub fn guidance_system(
         // Read-only view of the bundled dynamics.
         let rocket = &access.dynamics;
         let binding = access.binding;
+        let launch_site = access.launch_site;
+        let drone_ship_target_present = access.drone_ship_target.is_some();
         let propulsion = access.propulsion;
         let conditions = access.conditions;
         let aerodynamic_forces = access.aerodynamic_forces;
@@ -199,6 +209,19 @@ pub fn guidance_system(
         } else {
             altitude_m
         };
+        // A returning stage re-derives its ground-pad target from the current
+        // body orientation every tick. A target captured once at separation
+        // would miss the rotating pad by hundreds of kilometres over a return
+        // flight. A moving-deck target owns the command input when present.
+        if !drone_ship_target_present {
+            if let Some(launch_site) = launch_site {
+                let pad_body_fixed = geodetic_to_body_fixed(launch_site, &planet.domain_planet)
+                    .normalize()
+                    * (radius_m + f64::from(launch_site.altitude_m));
+                autopilot.target_landing_position_m =
+                    body_fixed_to_planet_inertial(pad_body_fixed, orientation);
+            }
+        }
         let inertial_velocity_mps = rocket.dynamics.velocity_mps;
         let surface_relative_velocity_mps = conditions.atmosphere_relative_velocity_mps;
         let surface_relative_speed_mps = conditions.airspeed_mps;
@@ -953,6 +976,88 @@ mod tests {
             DVec3::X * radius_m,
             DVec3::Y * tangential_speed_mps + DVec3::X * radial_speed_mps,
         )
+    }
+
+    #[test]
+    fn ground_pad_target_follows_the_rotating_body() {
+        let site = LaunchSiteCoordinates::default();
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let radius_m = earth.radius_km as f64 * 1000.0;
+        let orientation = earth_orientation();
+        let pad_body_fixed = geodetic_to_body_fixed(&site, &earth).normalize()
+            * (radius_m + f64::from(site.altitude_m));
+        let pad_j2000 = body_fixed_to_planet_inertial(pad_body_fixed, &orientation);
+
+        let mut app = insertion_app();
+        let entity = spawn_descent_rocket(
+            &mut app,
+            pad_j2000 + pad_j2000.normalize() * 1_000.0,
+            DVec3::ZERO,
+            DVec3::ZERO,
+            RocketMissionState::Landing,
+            AutopilotMode::Boostback,
+            1_000.0,
+        );
+        app.world_mut().entity_mut(entity).insert(site.clone());
+        app.update();
+        let target_j2000 = app
+            .world()
+            .get::<RocketAutopilot>(entity)
+            .expect("autopilot")
+            .target_landing_position_m;
+        assert!(
+            (target_j2000 - pad_j2000).length() < 1.0,
+            "ground target must be the pad, got {}",
+            (target_j2000 - pad_j2000).length()
+        );
+
+        let later_orientation = BodyOrientation::from_kernel(
+            NaifBodyId::EARTH,
+            TdbEpoch::from_seconds_since_j2000(3_600.0).expect("one hour"),
+            "guidance-test-orientation-later".to_owned(),
+            DQuat::from_rotation_z(std::f64::consts::TAU / 24.0),
+            DVec3::Z * (std::f64::consts::TAU / (23.934 * 3_600.0)),
+        );
+        let pad_later = body_fixed_to_planet_inertial(pad_body_fixed, &later_orientation);
+        app.insert_resource(earth_snapshot(later_orientation));
+        app.update();
+        let target_later = app
+            .world()
+            .get::<RocketAutopilot>(entity)
+            .expect("autopilot")
+            .target_landing_position_m;
+        assert!(
+            (target_later - pad_later).length() < 1.0,
+            "target must follow the rotated pad, got {}",
+            (target_later - pad_later).length()
+        );
+        assert!(
+            (target_later - target_j2000).length() > 100_000.0,
+            "one hour of Earth rotation must move the pad target"
+        );
+
+        // A moving-deck target owns the command input.
+        let sentinel = DVec3::new(1.0, 2.0, 3.0);
+        app.world_mut()
+            .get_mut::<RocketAutopilot>(entity)
+            .expect("autopilot")
+            .target_landing_position_m = sentinel;
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(DroneShipLandingTarget {
+                drone_ship: Entity::PLACEHOLDER,
+                prediction_horizon_s: 1.0,
+                deck_contact: false,
+            });
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<RocketAutopilot>(entity)
+                .expect("autopilot")
+                .target_landing_position_m,
+            sentinel,
+            "the pad update must not overwrite a moving-deck target"
+        );
     }
 
     /// At an apsis crossing with the periapsis below target, insertion must

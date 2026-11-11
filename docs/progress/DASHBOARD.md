@@ -63,12 +63,12 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | f490c4a |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | f490c4a |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | f490c4a |
-| `cargo test --features dem --lib` | 1232 passed, 0 failed, 2 ignored | f490c4a |
-| `cargo test --no-default-features --lib` | 1180 passed, 0 failed, 2 ignored | f490c4a |
+| `cargo test --features dem --lib` | 1233 passed, 0 failed, 2 ignored | f490c4a |
+| `cargo test --no-default-features --lib` | 1181 passed, 0 failed, 2 ignored | f490c4a |
 | `openspec validate --all --strict` | 43 passed, 0 failed | f490c4a |
 | `cargo build --release --features dem` | PASS | f490c4a |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | f490c4a |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage: no chutes, one crash at T+599.016 s (152.17 m/s, 19.25° tilt); the contact impulse keeps the wreck on the surface instead of a 739 km arc | f490c4a |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage targets the rotating pad: no chutes, one crash at T+510.234 s (1,040.52 m/s, 82.77° tilt, 208.68 rad/s spin, 684.32 km short); the contact impulse keeps the wreck on the surface | f490c4a |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -149,9 +149,11 @@ The residuals are recorded rather than hidden: the RCS cluster is a
 representative single-arm pure-couple set drawing from the final stage main tank,
 no flight exercises a failed thruster, and the booster recovery was flown but does
 not land. The recovery flight exposed and fixed chutes on a landing-gear vehicle,
-repeated crash events and a spinning-contact energy pump; an unset pad target, a
-representative 15 t reserve that boostback consumes entirely, and a sea-floor
-water-impact model remain, so recovery stays IMPLEMENTED-tested. The insertion law
+repeated crash events and a spinning-contact energy pump. The stage now targets
+the rotating pad, but it spins up to 209 rad/s before impact; the 15 t reserve is
+consumed by boostback, 25 t preserves insertion without a landing, 40 t breaks
+the ascent, and a sea-floor water-impact model remains. Recovery stays
+IMPLEMENTED-tested. The insertion law
 trims apsides only, but the measured plane error is 0.00135°, so no plane-change
 burn is justified by the current flight; the remaining insertion offset is the
 altitude deadband. The `enu_basis` residual remains, and SC-06 needs a dated
