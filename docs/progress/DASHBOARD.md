@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-11.
-Last code checkpoint: `eca1f58` (2026-11-11).
+Last code checkpoint: `f490c4a` (2026-11-11).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,16 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | eca1f58 |
-| `cargo check --all-targets --features dem` | PASS | eca1f58 |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | eca1f58 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | eca1f58 |
-| `cargo test --features dem --lib` | 1232 passed, 0 failed, 2 ignored | eca1f58 |
-| `cargo test --no-default-features --lib` | 1180 passed, 0 failed, 2 ignored | eca1f58 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | eca1f58 |
-| `cargo build --release --features dem` | PASS | eca1f58 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | eca1f58 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage: no chutes, one crash at T+599.016 s (152.17 m/s, 19.25° tilt); the contact impulse keeps the wreck on the surface instead of a 739 km arc | new |
+| `cargo fmt --check` | PASS | f490c4a |
+| `cargo check --all-targets --features dem` | PASS | f490c4a |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | f490c4a |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | f490c4a |
+| `cargo test --features dem --lib` | 1232 passed, 0 failed, 2 ignored | f490c4a |
+| `cargo test --no-default-features --lib` | 1180 passed, 0 failed, 2 ignored | f490c4a |
+| `openspec validate --all --strict` | 43 passed, 0 failed | f490c4a |
+| `cargo build --release --features dem` | PASS | f490c4a |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | f490c4a |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage: no chutes, one crash at T+599.016 s (152.17 m/s, 19.25° tilt); the contact impulse keeps the wreck on the surface instead of a 739 km arc | f490c4a |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

@@ -619,7 +619,7 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the contact-impulse commit.
+The gate for this track is the project gate, run on `f490c4a`, the contact-impulse commit.
 It adds three regression tests, so the floor rises to 1,232 with `dem` and 1,180
 without; the previous floor was 1,229 and 1,177.
 
