@@ -1005,6 +1005,7 @@ mod g_load_tests {
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),

@@ -18,7 +18,7 @@ least one test, not runtime-verified flight.
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery flight flown but still unverified** |
+| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery attitude grid-fin controlled, landing still unverified (energy)** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight; plane error measured at 0.0014°** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
@@ -181,8 +181,9 @@ would change the aerodynamic torque and the three committed baselines.
 `max_rcs_torque_nm` per axis (`clamp_rcs_torque`). There were no RCS thruster
 entities, no torque-to-thruster allocation, no propellant draw, and no
 minimum-impulse quantization. The controller gave gimbals the pitch/yaw command
-and RCS the remainder including roll; grid fins, when fitted, are mixed
-separately.
+and RCS the remainder including roll. Grid fins were a domain-only mixer at the
+time; they are now a separate atmospheric actuator on the recovering stage (see
+the grid-fin residual below).
 
 **Root cause of the former authority demand (2026-11-09/10).** Lowering
 `max_rcs_torque_nm` on the old code made the ascent fail: 2.0e4 lost control at
@@ -259,9 +260,12 @@ decreases the final-stage tank, and a failed +X thruster leaves no +X authority.
 SC-04 adds those eight tests; the recovery hardening adds two more (a
 landing-gear vehicle must not deploy chutes, and a crashed wreck must publish one
 terminal event), the contact-impulse fix adds three domain tests (central,
-offset-spin, and separating contact), and the pad-target wiring adds one ECS test
+offset-spin, and separating contact), the pad-target wiring adds one ECS test
 (the target follows one hour of Earth rotation and a moving deck is not
-overwritten). The tree now measures 1,233 passed with `dem` and 1,181 without.
+overwritten), and the grid-fin/entry work adds nine (six domain allocation
+tests, two ECS force/torque tests, one guidance handoff test) while replacing
+the three old normalized-mixer tests with one effectiveness test, a net gain of
+seven. The tree now measures 1,240 passed with `dem` and 1,188 without.
 
 **Baselines.** `ascent-gravity-turn` was re-recorded through
 `scripts/regression/save_baseline.sh` because the gimbal/RCS split changes the
@@ -280,16 +284,20 @@ vacuum insertion state) are unchanged. The baseline README records the reason.
    simplification of a separate RCS propellant system.
 3. Thruster failure is representable in the model and tested, but no flight
    scenario exercises a failed thruster.
-4. The recovery flight is now flown (2026-11-11), but it does not verify a
-   landing. The stage now inherits the launch site and guidance re-derives the
-   rotating pad target every tick (tested: one hour of Earth rotation moves the
-   target by more than 100 km). With the 15 t reserve the pad-target flight still
-   crashes at T+510.234 s (1,040.52 m/s descent, 82.77° tilt, 208.68 rad/s spin,
-   684.32 km short of the pad). Raising the reserve to 25 t preserves insertion
-   but the return still crashes (5,292.8 m/s, 427.7 rad/s); 40 t breaks the ascent
-   (stage separation at T+135.1 s, Ascent→Reentry at 116.7 km). The reserve stays
-   15 t so the ascent and baselines are unchanged. Attitude control through
-   boostback is the blocker, not only propellant.
+4. The recovery flight is now flown (2026-11-11) with a controlled entry, but it
+   does not verify a landing. The stage inherits the launch site and guidance
+   re-derives the rotating pad target every tick (tested: one hour of Earth
+   rotation moves the target by more than 100 km). It also inherits a
+   representative `RocketRcs` cluster, and it carries four grid fins that take
+   the atmospheric attitude command ahead of RCS. With the 15 t reserve the
+   flight enters engines-first, holds under 0.5 rad/s through the dynamic-
+   pressure rise, and crashes at T+594.828 s (342.66 m/s descent, 31.13° tilt,
+   744.67 km short of the pad, 0 kg propellant). Raising the reserve to 25 t
+   preserves insertion and improves the crash to T+553.813 s, 305.62 m/s,
+   37.65° tilt, 549.01 km short — still not a landing. 40 t breaks the ascent
+   (stage separation at T+135.1 s, Ascent→Reentry at 116.7 km). The committed
+   15 t reserve keeps the ascent and baselines unchanged; the remaining blocker
+   is recovery energy and burn sequencing, not attitude authority.
 5. The contact authority now applies a linear-plus-angular contact impulse at a
    crash: `RocketDynamicsState::contact_normal_impulse` and
    `apply_contact_impulse` use the contact-point effective mass, so the same
@@ -297,41 +305,44 @@ vacuum insertion state) are unchanged. The baseline README records the reason.
    spin was corrected only at the center of mass and launched the wreck onto a
    739 km arc; after it the wreck stays on the surface. Three domain tests pin
    the central, offset-spin, and separating cases.
-6. **Recovery attitude control.** The pad-target return spins up to 208.68 rad/s
-   before impact, and the 25 t variant reaches 427.7 rad/s. The recovery entity
-   uses the legacy 5,000 N·m scalar RCS clamp because it carries no `RocketRcs`
-   cluster, and the boostback command does not hold the attitude through the
-   high-speed return. The synthetic recovery tests land because they start in a
-   low-speed terminal state. This is the dominant recovery blocker.
+6. **Grid-fin fidelity.** The four-fin X installation is now a real force and
+   torque actuator: the static geometry comes from the catalog, the normal-force
+   slope is tapered by the existing hypersonic effectiveness curve, and control
+   gives the fins the gimbal residual before RCS. The area, radial arm, axial
+   station, and normal-force slope are representative rather than wind-tunnel
+   values; the model omits induced axial drag and has an ideal hinge (no rate
+   limit or actuator lag). These are recorded limitations, not hidden physics.
 7. A crash over water is treated as a crash on the sea-floor terrain height, not
    at the sea surface. The measured recovery impacts in the Gulf of Mexico and
    finishes on the sea floor at roughly −3.4 km terrain height; there is no
    water-impact, splashdown-at-surface, or buoyancy model.
 
-**Recovery flight measured after the 2026-11-11 fixes.** The same 5,400 s
-Starbase flight spawns the recovery entity at T+144.219 s and now gives it the
-launch site, so boostback targets the rotating pad rather than the sub-vehicle
-point. The 15,000 kg representative reserve is consumed by boostback by T+180 s
-(40.6 t to 25.6 t) and the stage reaches a 175.4 km apex near T+290 s. Before the
-fixes the stage deployed a drogue at 4.37 km and a main at 2.74 km, and the
-contact authority re-published a crash every tick (952 events). After the fixes a
-vehicle carrying landing gear skips parachute deployment entirely, and the wreck
-publishes one terminal crash: T+510.234 s, 1,040.52 m/s descent, 82.77° tilt,
-684.32 km short of the pad. The pre-contact center-of-mass speed is 668.64 m/s
-with a 208.68 rad/s spin; the scorecard's 3,910.37 m/s lateral is the
-contact-point `ω × r` term. The linear-plus-angular impulse removes the
-contact-point normal speed and leaves the wreck on the surface instead of
-launching it to a high arc. At T+5,400 s it is still `Crashed` with 0 kg
-propellant, ~0 m radar altitude and 418.08 m/s, which is the Earth-rotation
+**Recovery flight measured after the 2026-11-11 grid-fin fixes.** The same
+5,400 s Starbase flight spawns the recovery entity at T+144.219 s, gives it the
+launch site and a representative RCS cluster, and inserts four grid fins. The
+15,000 kg representative reserve is consumed by boostback by T+180 s (40.6 t to
+25.6 t) and the stage reaches a 171.7 km ballistic apex. Boostback hands off to
+the new engines-first `EntryDescent` mode when the reserve is exhausted; through
+the dynamic-pressure rise (T+435 to T+560, the window that previously reached
+208.68 rad/s) the measured body rate stays below 0.5 rad/s and the fin
+allocation keeps the air-relative angle of attack small. The wreck publishes one
+terminal crash at T+594.828 s: 342.66 m/s descent, 219.01 m/s lateral, 31.13°
+tilt, 684.36 m/s center-of-mass speed, 1.645 rad/s angular rate, 744.67 km short
+of the pad. Before the fins the same flight crashed at T+510.234 s with
+1,040.52 m/s descent and 208.68 rad/s. At T+5,400 s it is `Crashed` with 0 kg
+propellant, ~0 m radar altitude and 414.87 m/s, which is the Earth-rotation
 surface speed at the crash latitude; the position is the Gulf sea floor, not the
-sea surface (residual 7). Without the pad target the same stage crashed at
-T+599.016 s at 152.17 m/s and 19.25° tilt, so aiming at the pad changed the
-boostback direction and produced a harder crash; neither run is a recovery.
+sea surface (residual 7). The 25 t variant now crashes at T+553.813 s with
+305.62 m/s descent and 549.01 km still to go, so additional propellant alone
+does not close the return: the profile needs an entry burn and a landing-burn
+allocation, or a downrange recovery zone.
 
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
-exercised by the 5,400 s headless flight. The seven residuals above bound the
-claim; recovery and station/tank fidelity remain outside it.
+exercised by the 5,400 s headless flight. The grid-fin entry is flown and removes
+the former tumble, but a landing is not verified. The seven residuals above bound
+the claim; recovery energy sequencing and station/tank fidelity remain outside
+it.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -595,12 +606,14 @@ or GAP in the scope where it is untested or unflown.
    a simulation result. It must not be cited as visual verification of anything
    else.
 4. **RCS fidelity and recovery.** The representative station/tank model and the
-   booster-recovery case are the SC-04 residuals above. The recovery flight is
-   now flown and targets the rotating pad, but it does not land: the stage spins
-   up to 208.68 rad/s, boostback consumes the 15 t reserve, and the impact is a
-   crash. Raising the reserve to 25 t preserves insertion but not the return;
-   40 t breaks the ascent. The chute, repeated-crash-event and contact-impulse
-   defects found by that flight are fixed and tested. Recovery remains
+   booster-recovery case are the SC-04 residuals above. The recovery flight now
+   enters engines-first under grid-fin control (body rate below 0.5 rad/s through
+   the dynamic-pressure rise), but it does not land: boostback consumes the 15 t
+   reserve, the stage is still 744.67 km short, and the impact at T+594.828 s is
+   a crash at 342.66 m/s. A 25 t reserve improves the crash to 549.01 km short
+   and 305.62 m/s, but still does not land; 40 t breaks the ascent. The chute,
+   repeated-crash-event, contact-impulse and tumble defects found by these
+   flights are fixed and tested. Recovery energy sequencing remains
    IMPLEMENTED-tested, not VERIFIED hardware or flight.
 5. **Water impact.** A crash over water resolves against the sea-floor terrain
    height, not the sea surface. The measured recovery finishes on the Gulf sea
@@ -610,19 +623,21 @@ or GAP in the scope where it is untested or unflown.
 
 ## Next steps, in order of physical impact
 
-1. **Recovery attitude control.** The pad-target flight spins up to 208.68 rad/s
-   (427.7 rad/s with the 25 t reserve) before impact. The recovery entity has no
-   `RocketRcs` cluster and uses the legacy 5,000 N·m scalar clamp, and the
-   boostback command does not hold the attitude through the high-speed return.
-   Stabilise the booster through boostback before spending more propellant on the
-   reserve; the current 15 t ascent must stay unchanged unless a re-baseline is
-   deliberately recorded.
+1. **Recovery energy and burn sequencing.** The booster is now attitude-stable
+   through entry, but the 15 t reserve is spent on boostback and the stage lands
+   744.67 km downrange at 342.66 m/s. The next step is a real recovery burn
+   sequence — boostback allocation, an entry burn, and a landing burn — sized
+   from a source-backed reserve, or a downrange drone-ship profile that fits the
+   available propellant. Extra reserve alone does not land (25 t still crashes
+   549 km short); changing the committed 15 t or the ascent requires a deliberate
+   baseline re-record.
 2. **Water impact.** Resolve a water contact at the sea surface and distinguish a
    survivable splashdown from a crash, instead of always using the sea-floor
    height. This affects any coastal or offshore landing.
 3. **RCS station/tank fidelity.** Replace the representative single-arm cluster
    and final-stage tank draw with a catalogued layout. The current model remains a
-   documented simplification.
+   documented simplification; the recovering stage now uses the same cluster path
+   as the primary.
 4. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
    archived snapshot with a checksum; the current mutable vendor page cannot be
    pinned honestly.
@@ -635,9 +650,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on `2c61001`, the pad-target commit plus the test-import cleanup. It
-adds one ECS test, so the floor rises to 1,233 with `dem` and 1,181 without; the
-previous floor was 1,232 and 1,180.
+The gate for this track is the project gate, run on this grid-fin commit. It
+adds a net seven tests, so the floor rises to 1,240 with `dem` and 1,188 without;
+the previous floor was 1,233 and 1,181.
 
 | check | result |
 | --- | --- |
@@ -645,12 +660,12 @@ previous floor was 1,232 and 1,180.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,233 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,181 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,240 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,188 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site and targets the rotating pad; no parachute deployment; one crash at T+510.234 s (1,040.52 m/s descent, 82.77° tilt, 208.68 rad/s spin, 684.32 km short); 0 kg propellant, still `Crashed` at T+5,400 s |
-| reserve trade-off | 25 t preserves insertion but the recovery still crashes (5,292.8 m/s, 427.7 rad/s); 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
+| recovery stage in the same flight | inherits the launch site, RCS cluster and four grid fins; boostback → engines-first `EntryDescent`; body rate stays below 0.5 rad/s through the T+435–560 dynamic-pressure rise; one crash at T+594.828 s (342.66 m/s descent, 31.13° tilt, 1.645 rad/s, 744.67 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| reserve trade-off with grid fins | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |

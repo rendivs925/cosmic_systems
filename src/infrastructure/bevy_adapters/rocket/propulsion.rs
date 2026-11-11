@@ -7,6 +7,7 @@ use crate::application::rocket_spawning::{build_rocket_mesh, build_serial_stage_
 use crate::domain::entities::rocket::{EngineState, Rocket};
 use crate::domain::services::guidance::AutopilotMode;
 use crate::domain::services::landing_gear::LandingGear;
+use crate::domain::services::rcs::REPRESENTATIVE_RCS_ISP_S;
 use crate::domain::services::rocket_propulsion::{
     burn_duration_s, consume_propellant, separate_parallel_boosters_dynamics,
     separate_stage_dynamics, shed_stage, stage_gimbal_torque_body, stage_gimbaled_thrust_body,
@@ -101,6 +102,7 @@ pub fn propulsion_staging(
                             height_m: boosters.stage.height_m,
                             // Parallel boosters never inherit core stage gear.
                             landing_gear: None,
+                            grid_fins: None,
                             kind: SpentStageKind::Booster,
                         },
                     );
@@ -222,6 +224,7 @@ pub fn propulsion_staging(
                 // Only an independently recoverable serial stage receives
                 // its own gear assembly and child presentation meshes.
                 landing_gear: recovery_reserve_kg.and(separated_stage.landing_gear),
+                grid_fins: recovery_reserve_kg.and(separated_stage.grid_fins),
                 kind: SpentStageKind::Booster,
             },
         );
@@ -244,6 +247,17 @@ pub fn propulsion_staging(
                 stages: vec![recovery_stage],
                 parallel_boosters: None,
             };
+            // A recovering booster carries cold-gas thrusters. Capture the
+            // cluster sizing before the vehicle and autopilot are moved into
+            // their components.
+            let rcs_authority_nm = recovery_autopilot.actuation.max_rcs_torque_nm;
+            let rcs_isp_s = recovery_vehicle
+                .stages
+                .first()
+                .and_then(|stage| stage.engines.first())
+                .map_or(REPRESENTATIVE_RCS_ISP_S, |engine| {
+                    f64::from(engine.isp_vacuum)
+                });
             commands.entity(spent_entity).insert((
                 RecoveringStage,
                 RocketMissionState::Landing,
@@ -290,6 +304,13 @@ pub fn propulsion_staging(
                 // recovery-burn plume tied to real thrust instead of throttle.
                 AppliedPropulsionState::default(),
             ));
+            // A recovering booster carries cold-gas thrusters. Without the
+            // per-thruster cluster it would fall back to the legacy scalar
+            // clamp, which cannot represent minimum-impulse quantization or
+            // the propellant draw that the cluster models.
+            commands
+                .entity(spent_entity)
+                .insert(RocketRcs::representative(rcs_authority_nm, rcs_isp_s));
         }
         propulsion.time_since_separation_s = 0.0;
 

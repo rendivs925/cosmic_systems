@@ -46,6 +46,25 @@ pub struct LandingLegsDef {
     pub deploy_altitude_m: f32,
 }
 
+/// Per-stage grid-fin definition. Stages without a `grid_fins` block have no
+/// atmospheric attitude-control surfaces after separation.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GridFinsDef {
+    pub basis: DataBasis,
+    pub count: u32,
+    /// Planform area of one fin, m².
+    pub fin_area_m2: f32,
+    /// Body-axis to fin center-of-pressure distance, m.
+    pub radial_arm_m: f32,
+    /// Fin center-of-pressure station along body +Y from the stage center, m.
+    pub axial_station_m: f32,
+    /// Mechanical deflection limit, degrees.
+    pub max_deflection_deg: f32,
+    /// Representative normal-force slope, per radian.
+    pub normal_force_coefficient_per_rad: f32,
+}
+
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageDef {
@@ -66,6 +85,9 @@ pub struct StageDef {
     /// Optional deployable gear installed on this serial stage only.
     #[serde(default)]
     pub landing_legs: Option<LandingLegsDef>,
+    /// Optional grid-fin installation used for atmospheric attitude control.
+    #[serde(default)]
+    pub grid_fins: Option<GridFinsDef>,
     /// Payload fairing physically attached to this serial stage. The current
     /// vehicle architecture permits it only on the final serial stage.
     #[serde(default)]

@@ -1,11 +1,12 @@
 //! Vehicle-definition validation and the typed config error.
 
 use super::schema::{
-    is_https_url, is_iso_publication_date, DataBasis, EngineDef, LandingLegsDef, StageDef,
-    VehicleDef,
+    is_https_url, is_iso_publication_date, DataBasis, EngineDef, GridFinsDef, LandingLegsDef,
+    StageDef, VehicleDef,
 };
 use super::MAX_GIMBAL_RANGE_DEG;
 use crate::domain::entities::rocket::{ParallelBoosters, Rocket, RocketStage};
+use crate::domain::services::grid_fin::GridFinSpec;
 use crate::domain::services::landing_gear::LandingGearSpec;
 use crate::domain::services::simulation_run::is_lowercase_sha256;
 use bevy::math::Vec3;
@@ -147,6 +148,10 @@ impl VehicleDef {
                 self.validate_basis(&format!("{at} landing_legs"), legs.basis)?;
                 self.validate_landing_legs(&at, legs)?;
             }
+            if let Some(fins) = &stage.grid_fins {
+                self.validate_basis(&format!("{at} grid_fins"), fins.basis)?;
+                self.validate_grid_fins(&at, stage, fins)?;
+            }
             self.validate_basis(&format!("{at} engines"), stage.engines.basis)?;
             if stage.engines.values.is_empty() {
                 return Err(self.invalid(format!("{at}: needs at least one engine")));
@@ -191,6 +196,11 @@ impl VehicleDef {
             if stage.landing_legs.is_some() {
                 return Err(self.invalid(format!(
                     "{at}: landing_legs are not supported; parallel boosters never inherit core landing gear"
+                )));
+            }
+            if stage.grid_fins.is_some() {
+                return Err(self.invalid(format!(
+                    "{at}: grid_fins are not supported; parallel boosters never recover"
                 )));
             }
             if stage.fairing.is_some() {
@@ -363,6 +373,49 @@ impl VehicleDef {
         Ok(())
     }
 
+    /// Grid fins are atmospheric control surfaces; validate the installation
+    /// geometry against the stage envelope so the load-time model cannot
+    /// command authority from hardware outside the vehicle.
+    fn validate_grid_fins(
+        &self,
+        at: &str,
+        stage: &StageDef,
+        fins: &GridFinsDef,
+    ) -> Result<(), RocketConfigError> {
+        if fins.count != 4 {
+            return Err(self.invalid(format!(
+                "{at}: grid_fins count must be 4 for the X-configuration mixer"
+            )));
+        }
+        if !fins.fin_area_m2.is_finite() || fins.fin_area_m2 <= 0.0 {
+            return Err(self.invalid(format!("{at}: grid_fins fin_area_m2 must be > 0")));
+        }
+        if !fins.radial_arm_m.is_finite() || fins.radial_arm_m <= 0.0 {
+            return Err(self.invalid(format!("{at}: grid_fins radial_arm_m must be > 0")));
+        }
+        if !fins.axial_station_m.is_finite() || fins.axial_station_m.abs() > stage.height_m * 0.5 {
+            return Err(self.invalid(format!(
+                "{at}: grid_fins axial_station_m must be within the stage half-height"
+            )));
+        }
+        if !fins.max_deflection_deg.is_finite()
+            || fins.max_deflection_deg <= 0.0
+            || fins.max_deflection_deg >= 90.0
+        {
+            return Err(self.invalid(format!(
+                "{at}: grid_fins max_deflection_deg must be inside (0, 90)"
+            )));
+        }
+        if !fins.normal_force_coefficient_per_rad.is_finite()
+            || fins.normal_force_coefficient_per_rad <= 0.0
+        {
+            return Err(self.invalid(format!(
+                "{at}: grid_fins normal_force_coefficient_per_rad must be > 0"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_engine(
         &self,
         at: &str,
@@ -443,6 +496,14 @@ impl VehicleDef {
                     max_landing_mass_kg: legs.max_landing_mass_kg.map(|mass_kg| mass_kg as f64),
                     deploy_altitude_m: legs.deploy_altitude_m as f64,
                 }),
+                grid_fins: stage.grid_fins.as_ref().map(|fins| GridFinSpec {
+                    count: fins.count,
+                    fin_area_m2: fins.fin_area_m2 as f64,
+                    radial_arm_m: fins.radial_arm_m as f64,
+                    axial_station_m: fins.axial_station_m as f64,
+                    max_deflection_rad: (fins.max_deflection_deg as f64).to_radians(),
+                    normal_force_coefficient_per_rad: fins.normal_force_coefficient_per_rad as f64,
+                }),
                 fairing_dry_mass_kg: stage.fairing.as_ref().map(|fairing| fairing.dry_mass_kg),
                 engines: stage
                     .engines
@@ -469,6 +530,7 @@ impl VehicleDef {
                             recovery_propellant_reserve_kg: None,
                             // Parallel boosters do not receive serial-stage gear.
                             landing_gear: None,
+                            grid_fins: None,
                             fairing_dry_mass_kg: None,
                             engines: boosters
                                 .stage

@@ -97,6 +97,7 @@ mod engine_lifecycle_pipeline_tests {
             propellant_mass_kg: 100.0,
             recovery_propellant_reserve_kg: None,
             landing_gear: None,
+            grid_fins: None,
             fairing_dry_mass_kg: None,
             engines: vec![engine(max_ignitions)],
         }
@@ -500,6 +501,7 @@ mod ground_contact_tests {
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
@@ -1341,6 +1343,7 @@ mod recovery_pipeline_tests {
                 propellant_mass_kg: 600.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![RocketEngine {
                     position_m: bevy::math::Vec3::new(0.0, -5.0, 0.0),
@@ -1803,6 +1806,7 @@ mod ascent_pipeline_tests {
                     propellant_mass_kg: 9_250.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: None,
                     engines,
                 },
@@ -1814,6 +1818,7 @@ mod ascent_pipeline_tests {
                     propellant_mass_kg: 2_050.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: None,
                     engines: vec![RocketEngine {
                         position_m: bevy::math::Vec3::new(0.0, -1.2, 0.0),
@@ -2470,6 +2475,9 @@ mod ascent_pipeline_tests {
         let expected_gear = vehicle.stages[0]
             .landing_gear
             .expect("fixture stage 1 gear");
+        let expected_fins = vehicle.stages[0]
+            .grid_fins
+            .expect("fixture stage 1 grid fins");
         let reserve_kg = vehicle.stages[0]
             .recovery_propellant_reserve_kg
             .expect("fixture stage 1 recovery reserve");
@@ -2534,9 +2542,12 @@ mod ascent_pipeline_tests {
             &RocketPhysicsState,
             &RocketPropulsion,
             &LandingLegs,
+            &GridFins,
         ), With<RecoveringStage>>();
-        let (spent, physics, propulsion, legs) = recovering.single(world).unwrap();
+        let (spent, physics, propulsion, legs, fins) = recovering.single(world).unwrap();
         assert_eq!(legs.gear.spec, expected_gear);
+        assert_eq!(fins.spec, expected_fins);
+        assert!(world.get::<RocketRcs>(spent).is_some());
         assert_eq!(
             propulsion.vehicle.stages[0].landing_gear,
             Some(expected_gear)
@@ -2717,6 +2728,7 @@ mod stage_coordinate_pipeline_tests {
                 propellant_mass_kg: 900.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![engine.clone()],
             }],
@@ -2831,6 +2843,7 @@ mod parallel_booster_pipeline_tests {
                 propellant_mass_kg: 100.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![engine(100.0)],
             }],
@@ -2843,6 +2856,7 @@ mod parallel_booster_pipeline_tests {
                     propellant_mass_kg: 20.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: None,
                     engines: vec![engine(50.0)],
                 },

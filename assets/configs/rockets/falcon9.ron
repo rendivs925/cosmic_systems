@@ -68,6 +68,19 @@
                         max_landing_mass_kg: 45_000.0,
                         deploy_altitude_m: 100.0,
                     ),
+                    // Four 4 ft x 5 ft lattice fins near the top of the stage.
+                    // The normal-force slope is a representative flat-surface
+                    // scale, not a wind-tunnel table. They are inserted only on
+                    // the recovering stage, so the ascent authority is unchanged.
+                    grid_fins: (
+                        basis: Representative,
+                        count: 4,
+                        fin_area_m2: 1.86,
+                        radial_arm_m: 2.4,
+                        axial_station_m: 18.5,
+                        max_deflection_deg: 30.0,
+                        normal_force_coefficient_per_rad: 2.0,
+                    ),
                     engines: (
                         basis: Representative,
                         values: [

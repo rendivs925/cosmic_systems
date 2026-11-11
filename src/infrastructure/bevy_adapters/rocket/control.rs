@@ -1,8 +1,8 @@
 //! Guidance-command control and actuator-limit adapters.
 
 use super::components::{
-    RocketAutopilot, RocketCommands, RocketFlightConditions, RocketGeometry, RocketMissionState,
-    RocketPhysicsState, RocketPropulsion, RocketRcs, TorqueAccumulator,
+    GridFins, RocketAutopilot, RocketCommands, RocketFlightConditions, RocketGeometry,
+    RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRcs, TorqueAccumulator,
 };
 use super::events::{EngineCutoffEvent, EngineIgnitionEvent};
 use crate::domain::entities::rocket::EngineState;
@@ -16,7 +16,11 @@ use crate::domain::services::simulation_time::SimulationTime;
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, MessageWriter, Query, Res};
 
-/// Convert guidance attitude targets into gimbal and RCS commands.
+/// Convert guidance attitude targets into gimbal, grid-fin, and RCS commands.
+#[expect(
+    clippy::type_complexity,
+    reason = "Control consumes the complete guidance, airframe, atmosphere, and actuator state."
+)]
 pub fn control_system(
     sim_time: Res<SimulationTime>,
     mut rocket_query: Query<(
@@ -27,11 +31,20 @@ pub fn control_system(
         &RocketFlightConditions,
         &mut RocketAutopilot,
         &RocketMissionState,
+        Option<&mut GridFins>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
-    for (mut commands, rocket, propulsion, geometry, conditions, mut autopilot, mission) in
-        rocket_query.iter_mut()
+    for (
+        mut commands,
+        rocket,
+        propulsion,
+        geometry,
+        conditions,
+        mut autopilot,
+        mission,
+        grid_fins,
+    ) in rocket_query.iter_mut()
     {
         let gains = autopilot.gains;
         let inertia_diag = DVec3::new(
@@ -90,7 +103,31 @@ pub fn control_system(
             commands.gimbal_pitch_cmd_rad as f64,
             commands.gimbal_yaw_cmd_rad as f64,
         );
-        commands.rcs_torque_cmd_body = torque - gimbal_torque;
+        let residual_torque = torque - gimbal_torque;
+        // In the atmosphere the grid fins are the primary attitude actuator.
+        // They take as much of the gimbal residual as their hinges and the
+        // current dynamic pressure allow; RCS receives only what is left. In
+        // vacuum the allocation is identically zero, so RCS keeps full
+        // authority exactly as before.
+        commands.rcs_torque_cmd_body = if let Some(mut fins) = grid_fins {
+            let center_of_mass_y_m = rocket.dynamics.center_of_mass_m.y;
+            let deflections = fins.spec.allocate_deflections(
+                residual_torque,
+                conditions.dynamic_pressure_pa,
+                conditions.mach_number,
+                center_of_mass_y_m,
+            );
+            fins.deflections_rad = deflections;
+            residual_torque
+                - fins.spec.torque_body_nm(
+                    &deflections,
+                    conditions.dynamic_pressure_pa,
+                    conditions.mach_number,
+                    center_of_mass_y_m,
+                )
+        } else {
+            residual_torque
+        };
     }
 }
 

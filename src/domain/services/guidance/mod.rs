@@ -80,8 +80,12 @@ pub enum AutopilotMode {
     PoweredDescent,
     /// Booster flyback skeleton: retrograde pitch-over burn targeting
     /// return-to-launch-site downrange zeroing; hands off to
-    /// [`AutopilotMode::Landing`] (suicide burn / hover-slam) for touchdown.
+    /// [`AutopilotMode::EntryDescent`] for the unpowered atmospheric phase.
     Boostback,
+    /// Unpowered booster descent: hold the stage engines-first along the
+    /// air-relative velocity so grid fins trim a small angle of attack, then
+    /// hand off to powered/terminal descent near the surface.
+    EntryDescent,
     /// Terminal landing guidance.
     Landing,
     /// Two-impulse orbit transfer (Hohmann, or bi-elliptic when favorable):

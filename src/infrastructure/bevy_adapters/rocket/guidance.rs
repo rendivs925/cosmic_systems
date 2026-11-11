@@ -675,9 +675,48 @@ pub fn guidance_system(
                 commands.target_attitude = boostback.attitude;
                 commands.throttle_cmd = boostback.throttle as f32;
 
-                // Hand off to the landing leg once the pad is roughly below.
-                if boostback.complete {
-                    autopilot.mode = AutopilotMode::Landing;
+                // The boostback law ends when the stage is over the pad or
+                // when no burn is available. Either way, an altitude below the
+                // terminal gate goes straight to the landing leg; otherwise
+                // the stage must coast through the atmosphere engines-first
+                // before terminal guidance is meaningful.
+                let can_burn =
+                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0;
+                if boostback.complete || !can_burn {
+                    autopilot.mode =
+                        if radar_altitude_m < descent_config.terminal_descent_altitude_m {
+                            AutopilotMode::Landing
+                        } else {
+                            AutopilotMode::EntryDescent
+                        };
+                }
+            }
+            AutopilotMode::EntryDescent => {
+                // Unpowered atmospheric flight. Hold the stage engines-first
+                // along the air-relative velocity so the airframe presents its
+                // smallest angle of attack; grid fins trim the residual. This
+                // is the attitude the fins are sized for, not a broadside
+                // hold. Without propellant the stage cannot land, but it must
+                // still enter in a controlled attitude.
+                let air_velocity_mps = conditions.atmosphere_relative_velocity_mps;
+                let direction = if air_velocity_mps.length() > 1.0 {
+                    -air_velocity_mps.normalize()
+                } else if inertial_velocity_mps.length() > 1.0 {
+                    -inertial_velocity_mps.normalize()
+                } else {
+                    up_dir
+                };
+                commands.target_attitude =
+                    roll_preserving_attitude_from_direction(direction, rocket.dynamics.orientation);
+                commands.throttle_cmd = 0.0;
+
+                if radar_altitude_m < descent_config.powered_descent_altitude_m {
+                    if available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0 {
+                        autopilot.mode = AutopilotMode::PoweredDescent;
+                        *mission_state = RocketMissionState::PoweredDescent;
+                    } else if radar_altitude_m < descent_config.terminal_descent_altitude_m {
+                        autopilot.mode = AutopilotMode::Landing;
+                    }
                 }
             }
             AutopilotMode::StationKeep => {
@@ -976,6 +1015,65 @@ mod tests {
             DVec3::X * radius_m,
             DVec3::Y * tangential_speed_mps + DVec3::X * radial_speed_mps,
         )
+    }
+
+    #[test]
+    fn exhausted_boostback_hands_off_to_engines_first_entry_descent() {
+        let earth = PlanetFactory::create_by_name("Earth").expect("Earth exists");
+        let radius_m = earth.radius_km as f64 * 1000.0;
+        let up = DVec3::X;
+        let position_m = up * (radius_m + 10_000.0);
+        let velocity_mps = -up * 300.0 + DVec3::Y * 40.0;
+        let mut app = insertion_app();
+        let entity = spawn_descent_rocket(
+            &mut app,
+            position_m,
+            velocity_mps,
+            position_m,
+            RocketMissionState::Landing,
+            AutopilotMode::Boostback,
+            10_000.0,
+        );
+        {
+            let world = app.world_mut();
+            let mut propulsion = world
+                .get_mut::<RocketPropulsion>(entity)
+                .expect("propulsion");
+            propulsion.propellant_remaining_kg =
+                vec![0.0; propulsion.propellant_remaining_kg.len()];
+        }
+
+        // The boostback burn has nothing left to burn: the stage must not stay
+        // in the boostback attitude law for the entry.
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<RocketAutopilot>(entity)
+                .expect("autopilot")
+                .mode,
+            AutopilotMode::EntryDescent
+        );
+
+        app.update();
+        let forward = app
+            .world()
+            .get::<RocketPhysicsState>(entity)
+            .expect("physics")
+            .dynamics
+            .orientation
+            * DVec3::Y;
+        let expected = -velocity_mps.normalize();
+        assert!(
+            forward.dot(expected) > 0.99,
+            "entry attitude must point the engines into the flow: forward {forward:?}, expected {expected:?}"
+        );
+        assert_eq!(
+            app.world()
+                .get::<RocketCommands>(entity)
+                .expect("commands")
+                .throttle_cmd,
+            0.0
+        );
     }
 
     #[test]

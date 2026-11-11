@@ -15,6 +15,7 @@ pub mod events;
 pub mod flight_conditions;
 pub mod game_flow;
 pub mod gravity_orbit;
+pub mod grid_fin;
 pub mod ground_presentation;
 pub mod guidance;
 pub mod hud;

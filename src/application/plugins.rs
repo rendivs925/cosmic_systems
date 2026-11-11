@@ -122,6 +122,7 @@ use crate::infrastructure::bevy_adapters::rocket::game_flow::RocketGameFlowPlugi
 use crate::infrastructure::bevy_adapters::rocket::gravity_orbit::{
     update_orbital_elements, update_rocket_gravity, ActiveForceModel,
 };
+use crate::infrastructure::bevy_adapters::rocket::grid_fin::grid_fin_aerodynamics;
 use crate::infrastructure::bevy_adapters::rocket::ground_presentation::{
     update_launch_site_structure_visibility, update_rocket_ground_presentation,
     RocketGroundPresentationAssets,
@@ -566,6 +567,7 @@ impl Plugin for RocketFixedSimulationPlugin {
             FixedUpdate,
             (
                 aerodynamic_forces.in_set(RocketSet::AeroForces),
+                grid_fin_aerodynamics.in_set(RocketSet::AeroForces),
                 aerodynamic_torque.in_set(RocketSet::AeroTorque),
                 propulsion_thrust.in_set(RocketSet::PropulsionThrust),
                 propulsion_gimbal.in_set(RocketSet::PropulsionGimbal),

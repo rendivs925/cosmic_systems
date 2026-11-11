@@ -112,6 +112,7 @@ fn compile_stage(
         propellant_mass_kg,
         recovery_propellant_reserve_kg: None,
         landing_legs,
+        grid_fins: None,
         fairing,
         engines,
     })

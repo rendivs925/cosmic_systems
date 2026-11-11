@@ -6,6 +6,7 @@ use crate::domain::entities::rocket::{
 };
 use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
+use crate::domain::services::grid_fin::{GridFinSpec, GRID_FIN_COUNT};
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rcs::{RcsAllocation, RcsCluster};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
@@ -955,6 +956,24 @@ pub struct TerrainCollisionState {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct GroundRest {
     pub active: bool,
+}
+
+/// Grid-fin actuator state on a recovering stage. Guidance/control writes the
+/// deflections; the aerodynamic force writer reads them. The installation is
+/// immutable for the flight, so the spec lives beside the live deflection.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct GridFins {
+    pub spec: GridFinSpec,
+    pub deflections_rad: [f64; GRID_FIN_COUNT],
+}
+
+impl GridFins {
+    pub fn new(spec: GridFinSpec) -> Self {
+        Self {
+            spec,
+            deflections_rad: [0.0; GRID_FIN_COUNT],
+        }
+    }
 }
 
 /// Deployable landing gear attached to the active or recovering stage. It

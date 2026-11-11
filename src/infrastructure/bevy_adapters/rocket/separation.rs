@@ -46,6 +46,9 @@ pub struct SpentStageSpec {
     /// Present only when this detached body enters stage recovery. Parallel
     /// boosters never receive serial-stage gear.
     pub landing_gear: Option<crate::domain::services::landing_gear::LandingGearSpec>,
+    /// Present only when this detached body enters stage recovery with
+    /// atmospheric control surfaces.
+    pub grid_fins: Option<crate::domain::services::grid_fin::GridFinSpec>,
     pub kind: SpentStageKind,
 }
 
@@ -82,6 +85,9 @@ pub fn spawn_spent_stage_physics(commands: &mut Commands, spec: &SpentStageSpec)
                 gear_spec,
                 spec.dynamics.mass_kg,
             )));
+    }
+    if let Some(fin_spec) = spec.grid_fins {
+        commands.entity(entity).insert(GridFins::new(fin_spec));
     }
     entity
 }
@@ -283,6 +289,7 @@ pub fn check_fairing_separation(
                     radius_m: half_radius_m,
                     height_m: half_height_m,
                     landing_gear: None,
+                    grid_fins: None,
                     kind: SpentStageKind::FairingHalf,
                 },
             );

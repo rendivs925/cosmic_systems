@@ -589,6 +589,7 @@ mod tests {
                 propellant_mass_kg: 10.0,
                 recovery_propellant_reserve_kg: None,
                 landing_gear: None,
+                grid_fins: None,
                 fairing_dry_mass_kg: None,
                 engines: vec![engine_with_throttle(1.0, 1.0)],
             },

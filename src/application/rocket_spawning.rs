@@ -1690,6 +1690,7 @@ mod tests {
                     propellant_mass_kg: 900.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: None,
                     engines: vec![engine(Vec3::new(0.75, -5.0, 0.0))],
                 },
@@ -1701,6 +1702,7 @@ mod tests {
                     propellant_mass_kg: 250.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: None,
                     engines: vec![engine(Vec3::new(0.0, -4.0, 0.0))],
                 },
@@ -1742,6 +1744,7 @@ mod tests {
             propellant_mass_kg: 250.0,
             recovery_propellant_reserve_kg: None,
             landing_gear: None,
+            grid_fins: None,
             fairing_dry_mass_kg: None,
             engines: vec![RocketEngine {
                 position_m: Vec3::new(0.0, -height_m * 0.5, 0.0),

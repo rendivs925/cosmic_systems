@@ -63,12 +63,12 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 2c61001 |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 2c61001 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 2c61001 |
-| `cargo test --features dem --lib` | 1233 passed, 0 failed, 2 ignored | 2c61001 |
-| `cargo test --no-default-features --lib` | 1181 passed, 0 failed, 2 ignored | 2c61001 |
+| `cargo test --features dem --lib` | 1240 passed, 0 failed, 2 ignored | 2c61001 |
+| `cargo test --no-default-features --lib` | 1188 passed, 0 failed, 2 ignored | 2c61001 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 2c61001 |
 | `cargo build --release --features dem` | PASS | 2c61001 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 2c61001 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage targets the rotating pad: no chutes, one crash at T+510.234 s (1,040.52 m/s, 82.77° tilt, 208.68 rad/s spin, 684.32 km short); the contact impulse keeps the wreck on the surface | 2c61001 |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage inherits the pad target, RCS cluster and four grid fins: engines-first entry below 0.5 rad/s, one crash at T+594.828 s (342.66 m/s, 31.13° tilt, 744.67 km short) | 2c61001 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -150,10 +150,12 @@ representative single-arm pure-couple set drawing from the final stage main tank
 no flight exercises a failed thruster, and the booster recovery was flown but does
 not land. The recovery flight exposed and fixed chutes on a landing-gear vehicle,
 repeated crash events and a spinning-contact energy pump. The stage now targets
-the rotating pad, but it spins up to 209 rad/s before impact; the 15 t reserve is
-consumed by boostback, 25 t preserves insertion without a landing, 40 t breaks
-the ascent, and a sea-floor water-impact model remains. Recovery stays
-IMPLEMENTED-tested. The insertion law
+the rotating pad, and four grid fins now hold it engines-first with body rate
+below 0.5 rad/s through entry. It still lands 744.67 km short at 342.66 m/s
+because boostback consumes the 15 t reserve; 25 t improves the miss to 549.01 km
+without a landing and 40 t breaks the ascent, so a recovery burn sequence or a
+downrange profile is the remaining blocker. A sea-floor water-impact model also
+remains. Recovery stays IMPLEMENTED-tested. The insertion law
 trims apsides only, but the measured plane error is 0.00135°, so no plane-change
 burn is justified by the current flight; the remaining insertion offset is the
 altitude deadband. The `enu_basis` residual remains, and SC-06 needs a dated

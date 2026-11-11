@@ -140,6 +140,9 @@ pub struct RocketStage {
     /// component is assembled only for the currently active or recovering
     /// stage, never for the complete vehicle definition.
     pub landing_gear: Option<LandingGearSpec>,
+    /// Grid-fin installation used for atmospheric attitude control after
+    /// separation. The ECS actuator is assembled only on a recovering stage.
+    pub grid_fins: Option<crate::domain::services::grid_fin::GridFinSpec>,
     /// Payload-fairing dry mass attached to this serial stage, kg. Config
     /// validation permits this only on the final serial stage; runtime mass is
     /// still tracked by the active vehicle's authoritative payload inventory.
@@ -308,6 +311,14 @@ impl Rocket {
                         max_landing_mass_kg: Some(45_000.0),
                         deploy_altitude_m: 100.0,
                     }),
+                    grid_fins: Some(crate::domain::services::grid_fin::GridFinSpec {
+                        count: 4,
+                        fin_area_m2: 1.86,
+                        radial_arm_m: 2.4,
+                        axial_station_m: 18.5,
+                        max_deflection_rad: 30.0_f64.to_radians(),
+                        normal_force_coefficient_per_rad: 2.0,
+                    }),
                     fairing_dry_mass_kg: None,
                     engines: stage1_engines,
                 },
@@ -319,6 +330,7 @@ impl Rocket {
                     propellant_mass_kg: 107_000.0,
                     recovery_propellant_reserve_kg: None,
                     landing_gear: None,
+                    grid_fins: None,
                     fairing_dry_mass_kg: Some(1_900.0),
                     engines: vec![RocketEngine {
                         position_m: Vec3::new(0.0, -6.6, 0.0),
