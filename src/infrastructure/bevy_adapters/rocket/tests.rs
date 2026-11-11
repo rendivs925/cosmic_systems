@@ -1207,8 +1207,6 @@ mod ground_contact_tests {
     /// radar-altitude gate with negative vertical speed — and only then.
     #[test]
     fn descending_through_gate_deploys_landing_legs() {
-        use crate::domain::services::landing_gear::LandingGearSpec;
-
         let mut app = pad_app(0.0, 20.0);
         app.add_systems(
             FixedUpdate,
@@ -1658,6 +1656,7 @@ mod ascent_pipeline_tests {
     use crate::domain::services::actuation::ActuationLimits;
     use crate::domain::services::cube_sphere::TerrainPatch;
     use crate::domain::services::guidance::AutopilotMode;
+    use crate::domain::services::landing_gear::LandingGear;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
     use crate::domain::services::reference_frames::{
         planet_equatorial_reference_x_axis, planet_inertial_rotation_axis,
@@ -1676,6 +1675,7 @@ mod ascent_pipeline_tests {
     use crate::infrastructure::bevy_adapters::rocket::propulsion::{
         propulsion_consumption, propulsion_staging,
     };
+    use bevy::asset::{AssetApp, AssetPlugin};
     use bevy::math::{DQuat, DVec3};
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
@@ -2277,8 +2277,6 @@ mod ascent_pipeline_tests {
     /// FixedUpdate is scheduled at the requested warp frequency while every
     /// authoritative step remains `DT` simulation seconds.
     fn burn_rig_app(acceleration: f64) -> App {
-        use bevy::asset::{AssetApp, AssetPlugin};
-
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<Mesh>();
@@ -2460,8 +2458,6 @@ mod ascent_pipeline_tests {
 
     #[test]
     fn falcon9_separation_moves_stage_local_gear_to_the_recovering_booster() {
-        use crate::domain::services::landing_gear::LandingGear;
-
         let mut app = App::new();
         app.insert_resource(SimulationTime::new(DT));
         app.init_resource::<Assets<Mesh>>();
