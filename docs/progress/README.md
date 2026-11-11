@@ -174,10 +174,12 @@ and the lateral aero slopes are equalised. A headless Falcon 9 ascent reaches a
 of this closes a roadmap task.
 
 The open scientific-correctness items are recorded in the audit's "Recorded
-residuals": an apsides-only insertion trim (no plane change), the `enu_basis`
-geodetic-normal residual, the representative RCS station/tank layout with an
-unflown recovery at the new allocation, and the black offscreen solar capture
-path.
+residuals": the `enu_basis` geodetic-normal residual, the representative RCS
+station/tank layout with an unflown recovery at the new allocation, and the
+black offscreen solar capture path. The insertion law still has no plane-change
+burn, but the flight measures its plane error at 0.00135°, so that is a
+capability gap for off-nominal insertion rather than a defect on the current
+trajectory.
 
 ## How do we know it works?
 

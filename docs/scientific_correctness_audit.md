@@ -19,7 +19,7 @@ least one test, not runtime-verified flight.
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; CP comment corrected** |
 | SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery flight not re-flown** |
-| SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
+| SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight; plane error measured at 0.0014°** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
 | SC-08 | Orbital inclination measured from the geometric pole instead of the rotation axis | **DEFECT — fixed; one baseline regenerated** |
@@ -330,22 +330,25 @@ start is now the **radial-velocity crossing** (|ṙ| ≤ 0.5 m/s within 1 km of 
 apsis), which places the ignition within a few metres of the true apsis. The
 same test guards the retro overshoot at periapsis.
 
-**Measured** (headless Starbase, 5,400 s of simulated time, deterministic):
+**Measured** (headless Starbase, 5,400 s of simulated time, deterministic; state
+after the per-thruster RCS and equal-slope aero changes at `70bfef5`):
 
 | event | t | state |
 | --- | --- | --- |
 | stage 1 separation | 144.2 s | 40,600 kg shed, 112,898 kg upper stage |
-| ascent cut | 448.2 s | 137.09 km, 7,824.6 m/s, apo 200.82 km, peri 68.60 km |
-| circularization burn | 1,727.7–1,728.9 s | 276 kg consumed, one ignition |
-| insertion accepted | 1,728.9 s | **200.85 × 199.24 km, e = 0.00012** |
-| end of run | 5,400 s | 200.87 × 199.22 km, 23,901 kg |
+| ascent cut | 448.203 s | 137.076 km, 7,824.236 m/s, apo 200.164 km, peri 67.966 km |
+| circularization burn | 1,719.5–1,720.72 s | 280.6 kg consumed, one ignition |
+| insertion accepted | after the trim cutoff | **201.1783 × 199.9759 km, e ≈ 9.1e-5** |
+| end of run | 5,400 s | 201.1783 × 199.9759 km, 23,858.331 kg, 34,860.5 kg propellant |
 
 The accepted state satisfies the full predicate: both apsides within ±25 km,
 eccentricity ≤ 0.02, and the plane within ±2° of the Starbase geocentric
-inclination (about the physical rotation axis, SC-08). The upper stage finishes
-with about 18.0 t of propellant and one ignition still available. The slightly
-later burn and 0.8 km apsis spread, compared with the pre-SC-04 5e7 run, are the
-cost of the now-physical 5e3 N·m RCS authority; SC-05 still closes.
+inclination (about the physical rotation axis, SC-08). The 2026-11-11 diagnostic
+measures that plane directly: achieved inclination **25.84445°** against the
+**25.84579°** geocentric target, an error of **0.00135° (2.4e-5 rad)**. The ±2°
+band is a tolerance, not a consumed error. The apoapsis sits 1.18 km above the
+200 km target and the periapsis 0.02 km below it, which is the trim deadband
+rather than a plane or energy failure.
 
 **Tests.** Four ECS guidance tests pin the law: a prograde burn at the apsis, the
 running-burn latch away from the apsis, no burn before the apsis, and no burn on
@@ -354,9 +357,11 @@ unsafe periapsis now cuts the ascent one tick earlier and is handed to the trim
 law, which keeps it under thrust.
 
 **Residual.** The ascent pitch program is still open-loop (schedule plus the
-radial-velocity-nulling trim above 80 km); the insertion law trims the apsides
-but not the orbital plane. A plane error is only observed by the acceptance
-predicate, never corrected by a burn.
+radial-velocity-nulling trim above 80 km). The insertion law trims the apsides
+and not the orbital plane, but the measured plane error is 0.00135°, so the
+missing plane burn is a capability gap for off-nominal insertion, not a consumed
+error on this trajectory. The remaining insertion offset is the altitude
+deadband recorded above.
 
 ## SC-06 — Falcon 9 data
 
@@ -523,11 +528,15 @@ Record the choice in the consumer's doc comment.
 These are known remaining gaps. None is called VERIFIED; each stays IMPLEMENTED
 or GAP in the scope where it is untested or unflown.
 
-1. **Insertion trims apsides only.** The circularization law raises the
-   periapsis to the target radius; it never commands a plane change. A
-   plane/inclination error is observed by the acceptance predicate (~±2° at
-   Starbase) and is accepted, not corrected. Fixing it needs a plane-change burn
-   and a new baseline review.
+1. **Insertion trims apsides only, and the plane needs no trim.** The
+   circularization law raises the periapsis to the target radius; it never
+   commands a plane change. The 2026-11-11 flight measured the achieved
+   inclination at acceptance as 25.84445° against the 25.84579° geocentric
+   target, an error of 0.00135° (2.4e-5 rad), so the ±2° acceptance band is
+   tolerance rather than observed error. The trim leaves a +1.18 km / −0.02 km
+   apsis offset from the 200 km target, which is a control deadband. A
+   plane-change burn remains a capability gap for off-nominal insertion, not a
+   correction this trajectory needs.
 2. **SC-07 ENU residual.** `enu_basis` builds `up` from the radial at the
    *geodetic* latitude, not the WGS-84 ellipsoid normal, so local-tangent heights
    are tilted by up to ≈0.19°. Flight-critical paths do not use it (the launch
@@ -543,17 +552,19 @@ or GAP in the scope where it is untested or unflown.
 
 ## Next steps, in order of physical impact
 
-1. **Trim the orbital plane.** The insertion law now closes both apsides; the
-   remaining orbital-element error is inclination. A bounded plane-change burn
-   (or an ascent-azimuth correction) would close it, but it changes every
-   insertion baseline and needs the same measured A/B used above.
-2. **RCS station/tank fidelity and a recovery flight.** Replace the representative
+1. **RCS station/tank fidelity and a recovery flight.** Replace the representative
    single-arm cluster and final-stage tank draw with a catalogued layout, then fly
    the booster recovery at the new authority. Until then SC-04's recovery scope
    is IMPLEMENTED-tested, not flight-verified.
-3. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
+2. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
    archived snapshot with a checksum; the current mutable vendor page cannot be
    pinned honestly.
+3. **Insertion deadband (optional, low impact).** The plane error is measured at
+   0.00135°, so a plane-change burn is not justified by this flight. The visible
+   insertion offset is the altitude deadband (+1.18 km apoapsis). Tightening it
+   is a control change with a baseline review; treat it as polish, not physics.
+   A plane-change law would still be needed for off-nominal or plane-corrected
+   insertion, but nothing in the current flight asks for one.
 
 ## Validation
 

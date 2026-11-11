@@ -722,6 +722,9 @@ pub fn guidance_system(
                 speed_mps = inertial_velocity_mps.length(),
                 apoapsis_km = (state_elements.apoapsis_m - radius_m) / 1000.0,
                 periapsis_km = (state_elements.periapsis_m - radius_m) / 1000.0,
+                inclination_deg = state_elements.inclination_rad.to_degrees(),
+                target_inclination_deg =
+                    autopilot.target_orbit.target_inclination_rad.to_degrees(),
                 throttle = commands.throttle_cmd,
                 "autopilot mode change"
             );
