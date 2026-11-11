@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-11. Last code checkpoint: `feb8bfe`.
+Snapshot: 2026-11-11. Last code checkpoint: `eca1f58`.
 
 ---
 
@@ -193,8 +193,8 @@ trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1227 passed, 2 ignored
-cargo test --no-default-features --lib   # 1175 passed, 2 ignored
+cargo test --features dem --lib          # 1229 passed, 2 ignored
+cargo test --no-default-features --lib   # 1177 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -217,8 +217,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,227 domain and adapter
-tests pass (1,175 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,229 domain and adapter
+tests pass (1,177 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.

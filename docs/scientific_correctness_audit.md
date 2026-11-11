@@ -614,9 +614,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the recovery-hardening
-commit (pinned in the dashboard). It adds two regression tests, so the floor rises
-to 1,229 with `dem` and 1,177 without; the previous floor was 1,227 and 1,175.
+The gate for this track is the project gate, run on `eca1f58`, the
+recovery-hardening commit. It adds two regression tests, so the floor rises to
+1,229 with `dem` and 1,177 without; the previous floor was 1,227 and 1,175.
 
 | check | result |
 | --- | --- |
