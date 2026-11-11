@@ -27,6 +27,7 @@ pub mod physics;
 pub mod physics_orbital;
 pub mod physics_utils;
 pub mod planet_factory;
+pub mod rcs;
 pub mod recovery;
 pub mod reference_frames;
 #[cfg(feature = "dem")]

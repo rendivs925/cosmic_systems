@@ -19,6 +19,20 @@ REGRESSION_TEST_FILTER=determinism_regression_tests::<test-name> \
 
 Review the fixture audit metadata, state samples, and hash chain before commit.
 
+## 2026-11-11 per-thruster RCS and gimbal-split update
+
+`ascent-gravity-turn` was re-recorded after the RCS model became a per-thruster
+allocation and the gimbal/RCS split was made explicit: gimbals receive the
+primary pitch/yaw command in every phase and RCS supplies only the residual
+(including roll). The old ascent path sent the full torque command to both
+actuators, so the previous fixture contains small RCS-driven rates that the new
+allocation does not produce (the recorded angular velocity is exactly zero in the
+early window). `ascent` (the first 4 s) and `leo-insertion-safe` (a vacuum
+insertion state) are unchanged. No guidance law, force equation, or integrator
+changed in this step; only the actuator allocation and the now-real RCS
+propellant draw did. The headless Falcon 9 insertion still closes at
+201.17 x 199.97 km with 42.49 kg of RCS propellant used.
+
 ## 2026-11-10 launch-roll and RCS-authority update
 
 `ascent-gravity-turn` and `leo-insertion-safe` were re-recorded after ascent

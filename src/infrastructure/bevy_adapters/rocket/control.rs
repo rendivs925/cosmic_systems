@@ -2,7 +2,7 @@
 
 use super::components::{
     RocketAutopilot, RocketCommands, RocketFlightConditions, RocketGeometry, RocketMissionState,
-    RocketPhysicsState, RocketPropulsion, TorqueAccumulator,
+    RocketPhysicsState, RocketPropulsion, RocketRcs, TorqueAccumulator,
 };
 use super::events::{EngineCutoffEvent, EngineIgnitionEvent};
 use crate::domain::entities::rocket::EngineState;
@@ -73,22 +73,14 @@ pub fn control_system(
             gimbal_throttle,
             conditions.ambient_pressure_pa,
         );
-        commands.gimbal_pitch_cmd_rad = if terminal_descent {
-            clamp_deflection(gimbal_pitch, autopilot.actuation.max_gimbal_deflection_rad)
-        } else {
-            gimbal_pitch
-        };
-        commands.gimbal_yaw_cmd_rad = if terminal_descent {
-            clamp_deflection(gimbal_yaw, autopilot.actuation.max_gimbal_deflection_rad)
-        } else {
-            gimbal_yaw
-        };
-        if !terminal_descent {
-            // Preserve ascent and coast allocation: RCS damps all axes unless
-            // terminal descent has main-engine authority to subtract.
-            commands.rcs_torque_cmd_body = torque;
-            continue;
-        }
+        commands.gimbal_pitch_cmd_rad =
+            clamp_deflection(gimbal_pitch, autopilot.actuation.max_gimbal_deflection_rad);
+        commands.gimbal_yaw_cmd_rad =
+            clamp_deflection(gimbal_yaw, autopilot.actuation.max_gimbal_deflection_rad);
+        // Gimbals receive the primary pitch/yaw command in every phase; RCS
+        // supplies only the remaining torque (including roll) instead of
+        // doubling the PID authority. The old ascent path sent the full torque
+        // to both, which now costs real RCS propellant.
         let gimbal_torque = stage_gimbal_torque_body(
             &stage.engines,
             stage_origin_in_stack_m,
@@ -98,13 +90,12 @@ pub fn control_system(
             commands.gimbal_pitch_cmd_rad as f64,
             commands.gimbal_yaw_cmd_rad as f64,
         );
-        // Gimbals receive the primary pitch/yaw command; RCS only supplies the
-        // remaining torque (including roll) instead of doubling PID authority.
         commands.rcs_torque_cmd_body = torque - gimbal_torque;
     }
 }
 
 /// Apply actuator slew and mechanical limits to guidance-control commands.
+#[allow(clippy::type_complexity)]
 pub fn actuation_system(
     sim_time: Res<SimulationTime>,
     mut ignition_writer: MessageWriter<EngineIgnitionEvent>,
@@ -116,10 +107,11 @@ pub fn actuation_system(
         &mut TorqueAccumulator,
         &RocketAutopilot,
         &RocketMissionState,
+        Option<&mut RocketRcs>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep_f32();
-    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission) in
+    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission, rcs) in
         rocket_query.iter_mut()
     {
         if matches!(
@@ -178,10 +170,35 @@ pub fn actuation_system(
             commands.gimbal_yaw_cmd_rad,
             limits.max_gimbal_deflection_rad,
         );
-        torque_accum.add_torque_nm(clamp_rcs_torque(
-            commands.rcs_torque_cmd_body,
-            limits.max_rcs_torque_nm,
-        ));
+        let rcs_torque = if let Some(mut rcs) = rcs {
+            // The thruster cluster is the single owner of the hardware torque
+            // envelope. Do not pre-clamp the command with the legacy scalar
+            // limit as well: `allocate` saturates at the same per-axis authority
+            // and reports it, so applying both would duplicate the rule.
+            let available_kg = propulsion.final_stage_propellant_kg() - rcs.pending_tank_draw_kg;
+            let allocation = rcs.cluster.allocate(
+                commands.rcs_torque_cmd_body,
+                sim_time.fixed_timestep(),
+                available_kg,
+            );
+            rcs.propellant_used_kg += allocation.propellant_used_kg;
+            rcs.pending_tank_draw_kg += allocation.propellant_used_kg;
+            // A single tick's RCS draw is well below the f32 resolution of a
+            // 100 t stage tank. Drain in 0.05 kg chunks so the mass inventory
+            // follows the exact f64 draw instead of rounding every tick away.
+            if rcs.pending_tank_draw_kg >= 0.05 {
+                let removed_kg =
+                    propulsion.consume_final_stage_propellant(rcs.pending_tank_draw_kg);
+                rcs.pending_tank_draw_kg = (rcs.pending_tank_draw_kg - removed_kg).max(0.0);
+            }
+            rcs.last_allocation = Some(allocation);
+            allocation.torque_nm
+        } else {
+            // Minimal harnesses without a thruster set keep the validated
+            // per-axis clamp; the force/torque envelope is identical.
+            clamp_rcs_torque(commands.rcs_torque_cmd_body, limits.max_rcs_torque_nm)
+        };
+        torque_accum.add_torque_nm(rcs_torque);
     }
 }
 

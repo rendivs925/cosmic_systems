@@ -7,6 +7,7 @@ use crate::domain::entities::rocket::Rocket;
 use crate::domain::services::body_orientation::BodyOrientation;
 use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
 use crate::domain::services::planet_factory::PlanetFactory;
+use crate::domain::services::rcs::REPRESENTATIVE_RCS_ISP_S;
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, enu_basis, geodetic_to_body_fixed,
     geodetic_to_terrain_lat_lon, surface_velocity_in_planet_inertial,
@@ -251,6 +252,18 @@ fn spawn_rocket_core(commands: &mut Commands, setup: &LaunchSetup) -> Entity {
         LandingScorecard::default(),
         CommsState::default(),
         RetroPropulsionEffect::default(),
+    ));
+    commands.entity(entity).insert(RocketRcs::representative(
+        setup.autopilot.actuation.max_rcs_torque_nm,
+        setup
+            .propulsion
+            .vehicle
+            .stages
+            .last()
+            .and_then(|stage| stage.engines.first())
+            .map_or(REPRESENTATIVE_RCS_ISP_S, |engine| {
+                f64::from(engine.isp_vacuum)
+            }),
     ));
     commands
         .entity(entity)

@@ -7,6 +7,7 @@ use crate::domain::entities::rocket::{
 use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
+use crate::domain::services::rcs::{RcsAllocation, RcsCluster};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
 use crate::domain::services::rocket_propulsion::{
     ActiveVehicleMassProperties, ActiveVehicleMassPropertiesInput,
@@ -551,6 +552,24 @@ impl RocketPropulsion {
         true
     }
 
+    /// Propellant remaining in the final serial stage, kg. The representative
+    /// RCS cluster draws from this tank because the catalogue has no separate
+    /// RCS inventory.
+    pub(crate) fn final_stage_propellant_kg(&self) -> f64 {
+        self.propellant_remaining_kg.last().copied().unwrap_or(0.0) as f64
+    }
+
+    /// Drain the final serial stage's tank by the RCS mass flow. Returns the
+    /// mass actually removed, never more than the tank held.
+    pub(crate) fn consume_final_stage_propellant(&mut self, requested_kg: f64) -> f64 {
+        let Some(remaining_kg) = self.propellant_remaining_kg.last_mut() else {
+            return 0.0;
+        };
+        let before_kg = *remaining_kg;
+        *remaining_kg = (*remaining_kg - requested_kg.max(0.0) as f32).max(0.0);
+        f64::from(before_kg - *remaining_kg)
+    }
+
     /// Derive mass, inertia, and center of mass from the one authoritative
     /// attached vehicle inventory.
     pub(crate) fn mass_properties(
@@ -575,6 +594,33 @@ impl RocketPropulsion {
             booster_propellant_remaining_kg,
         }
         .calculate()
+    }
+}
+
+/// Per-thruster RCS state. Optional on minimal test harnesses; without it
+/// actuation keeps the legacy per-axis torque clamp.
+#[derive(Component, Debug, Clone)]
+pub struct RocketRcs {
+    pub cluster: RcsCluster,
+    /// Exact propellant consumed by the thrusters since spawn, kg.
+    pub propellant_used_kg: f64,
+    /// Draw not yet removed from the f32 stage tank. A single RCS tick can be
+    /// far below the f32 resolution of a 100 t tank, so the exact f64 draw is
+    /// accumulated and drained in small chunks.
+    pub pending_tank_draw_kg: f64,
+    pub last_allocation: Option<RcsAllocation>,
+}
+
+impl RocketRcs {
+    /// Build the representative cluster at the vehicle's validated per-axis
+    /// authority and final-stage vacuum Isp.
+    pub(crate) fn representative(max_torque_per_axis_nm: f64, isp_s: f64) -> Self {
+        Self {
+            cluster: RcsCluster::representative(max_torque_per_axis_nm, isp_s),
+            propellant_used_kg: 0.0,
+            pending_tank_draw_kg: 0.0,
+            last_allocation: None,
+        }
     }
 }
 

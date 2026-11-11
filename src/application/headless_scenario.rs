@@ -21,7 +21,9 @@ use crate::infrastructure::bevy_adapters::entity_components::{
 use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
-use crate::infrastructure::bevy_adapters::rocket::components::{RocketMissionState, SpentStage};
+use crate::infrastructure::bevy_adapters::rocket::components::{
+    RocketMissionState, RocketRcs, SpentStage,
+};
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     build_simulation_telemetry_frame, record_simulation_telemetry_system,
@@ -297,6 +299,18 @@ pub fn run_headless_scenario_artifact(
             .resource_mut::<SimulationTelemetryRecorder>()
             .events,
     );
+    let rcs_used_kg = {
+        let world = app.world_mut();
+        let mut query = world.query::<&RocketRcs>();
+        query.iter(world).next().map(|rcs| rcs.propellant_used_kg)
+    };
+    if let Some(rcs_used_kg) = rcs_used_kg {
+        bevy::log::info!(
+            target: "rcs_summary",
+            propellant_used_kg = rcs_used_kg,
+            "RCS propellant summary"
+        );
+    }
     artifact.validate()?;
     Ok(artifact)
 }

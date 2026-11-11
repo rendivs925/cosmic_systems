@@ -1607,6 +1607,7 @@ mod ascent_pipeline_tests {
     use crate::domain::entities::rocket::{
         EngineState, Rocket, RocketEngine, RocketStage, ThrustReference,
     };
+    use crate::domain::services::actuation::ActuationLimits;
     use crate::domain::services::cube_sphere::TerrainPatch;
     use crate::domain::services::guidance::AutopilotMode;
     use crate::domain::services::physics_orbital::LowEarthOrbitTarget;
@@ -1818,6 +1819,11 @@ mod ascent_pipeline_tests {
         ));
 
         let vehicle = electron_like();
+        let rcs_isp_s = vehicle
+            .stages
+            .last()
+            .and_then(|stage| stage.engines.first())
+            .map_or(220.0, |engine| f64::from(engine.isp_vacuum));
         let propellant = vehicle
             .stages
             .iter()
@@ -1871,6 +1877,7 @@ mod ascent_pipeline_tests {
         app.world_mut().entity_mut(vehicle_entity).insert((
             RocketCommands::default(),
             RocketAutopilot::default(),
+            RocketRcs::representative(ActuationLimits::default().max_rcs_torque_nm, rcs_isp_s),
             OrbitalElements::default(),
             TerrainCollisionState::default(),
             GroundRest { active: true },
@@ -3486,6 +3493,155 @@ mod determinism_regression_tests {
         assert!(
             end.guidance_code >= 1,
             "guidance never advanced past pre-launch"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rcs_pipeline_tests {
+    use super::*;
+    use crate::domain::entities::rocket::Rocket;
+    use crate::domain::services::simulation_time::SimulationTime;
+    use crate::infrastructure::bevy_adapters::rocket::control::actuation_system;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    #[test]
+    fn per_thruster_rcs_allocates_torque_and_draws_final_stage_propellant() {
+        const DT: f64 = 1.0 / 64.0;
+        let vehicle = Rocket::falcon9_test_fixture();
+        let propellant_remaining_kg: Vec<f32> = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+        let final_stage_before_kg = f64::from(*propellant_remaining_kg.last().unwrap());
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        register_rocket_messages(&mut app);
+        app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketCommands {
+                    rcs_torque_cmd_body: DVec3::X * 1_000.0,
+                    ..Default::default()
+                },
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg,
+                    booster_attachment: BoosterAttachmentState::Detached,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 10.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                TorqueAccumulator::default(),
+                RocketAutopilot::default(),
+                RocketMissionState::Orbit,
+                RocketRcs::representative(5_000.0, 311.0),
+            ))
+            .id();
+
+        app.add_systems(Update, actuation_system);
+        app.update();
+
+        let torque = app
+            .world()
+            .get::<TorqueAccumulator>(entity)
+            .unwrap()
+            .torque_nm();
+        assert!(
+            (torque.x - 1_000.0).abs() < 1e-6,
+            "the thruster allocation must reproduce the commanded X torque: {torque:?}"
+        );
+        assert!(torque.y.abs() < 1e-9 && torque.z.abs() < 1e-9);
+
+        let rcs = app.world().get::<RocketRcs>(entity).unwrap();
+        assert!(rcs.propellant_used_kg > 0.0);
+        assert!(rcs.last_allocation.is_some());
+
+        // One tick's draw is below the f32 tank resolution; run long enough for
+        // the f64 accumulator to drain a measurable chunk.
+        for _ in 0..1_000 {
+            app.update();
+        }
+        let propulsion = app.world().get::<RocketPropulsion>(entity).unwrap();
+        assert!(
+            propulsion.final_stage_propellant_kg() < final_stage_before_kg - 1.0,
+            "RCS must draw from the final stage tank"
+        );
+        let rcs = app.world().get::<RocketRcs>(entity).unwrap();
+        assert!(rcs.propellant_used_kg > 2.0);
+    }
+
+    #[test]
+    fn failed_thruster_removes_authority_in_the_pipeline() {
+        const DT: f64 = 1.0 / 64.0;
+        let vehicle = Rocket::falcon9_test_fixture();
+        let propellant_remaining_kg: Vec<f32> = vehicle
+            .stages
+            .iter()
+            .map(|stage| stage.propellant_mass_kg)
+            .collect();
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        register_rocket_messages(&mut app);
+        app.insert_resource(SimulationTime::new(DT));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            DT,
+        )));
+
+        let mut rcs = RocketRcs::representative(5_000.0, 311.0);
+        assert!(rcs.cluster.set_failed(0, true));
+        let entity = app
+            .world_mut()
+            .spawn((
+                RocketCommands {
+                    rcs_torque_cmd_body: DVec3::X * 1_000.0,
+                    ..Default::default()
+                },
+                RocketPropulsion {
+                    vehicle,
+                    active_stage: 0,
+                    propellant_remaining_kg,
+                    booster_attachment: BoosterAttachmentState::Detached,
+                    throttle: 0.0,
+                    gimbal_pitch_rad: 0.0,
+                    gimbal_yaw_rad: 0.0,
+                    time_since_separation_s: 10.0,
+                    ullage_settle_time_s: 0.0,
+                    separations_count: 0,
+                    attached_payload_kg: 0.0,
+                },
+                TorqueAccumulator::default(),
+                RocketAutopilot::default(),
+                RocketMissionState::Orbit,
+                rcs,
+            ))
+            .id();
+
+        app.add_systems(Update, actuation_system);
+        app.update();
+
+        let torque = app
+            .world()
+            .get::<TorqueAccumulator>(entity)
+            .unwrap()
+            .torque_nm();
+        assert!(
+            torque.length() < 1e-9,
+            "a failed +X thruster must leave no +X authority"
         );
     }
 }
