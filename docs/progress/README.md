@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-10. Last code checkpoint: `0e333b0`.
+Snapshot: 2026-11-11. Last code checkpoint: `70bfef5`.
 
 ---
 
@@ -32,6 +32,23 @@ The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06
 edge structure, RD-01 invalidation audit and VL-03 visual acceptance — are
 implemented, evidenced and archived. The two former blockers also closed on
 2026-11-09: the release baseline (P0-04) and the three-mode smoke (VL-01).
+
+The scientific-correctness extension also closed three items on 2026-11-11. RCS
+is no longer one scalar clamp per axis: `domain::services::rcs` owns a
+representative six-thruster pure-couple cluster with allocation, failure, a
+0.1 N·s minimum impulse and a propellant draw, and gimbals now take the primary
+pitch/yaw command in every phase while RCS supplies only the residual (the old
+ascent sent the full command to both, doubling pitch/yaw authority). The Falcon 9
+source entry records why the mutable vendor page cannot honestly be byte-pinned,
+so it stays `Representative` and run identity pins the loaded configuration hash
+instead. And the two lateral aerodynamic slopes are now equal at 1.5 per radian,
+which makes the axisymmetric airframe roll-invariant; all three baselines pass
+unchanged. The headless Falcon 9 flight now closes at 201.1783 x 199.9759 km with
+42.483 kg of RCS propellant used. What that does *not* claim is recorded in the
+audit: the cluster is representative, a failed-thruster flight and the booster
+recovery at the new allocation were not flown, and the insertion law still trims
+apsides only.
+
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
 because the shared default epoch is local noon only at Papua. Resident regional
@@ -150,10 +167,17 @@ static-margin comment described the opposite sign, and an ascent attitude target
 that commanded a ~4 rad roll slew at liftoff and forced a 5e7 N·m RCS clamp —
 and records two further audited items: handedness (which led to the third
 defect) and per-thruster RCS allocation. Preserving the pad roll cut the RCS
-requirement to 5e3 N·m, so the per-thruster model can now be built at a physical
-authority. A headless Falcon 9 ascent reaches a 200.85 x 199.24 km orbit
-(e = 0.00012) with about 18 t of propellant left. None of this closes a roadmap
-task.
+requirement to 5e3 N·m, the per-thruster model now runs at that physical
+authority, the mutable Falcon 9 web source records why it cannot be byte-pinned,
+and the lateral aero slopes are equalised. A headless Falcon 9 ascent reaches a
+201.18 x 199.98 km orbit (e ≈ 9.1e-5) with 42.5 kg of RCS propellant used. None
+of this closes a roadmap task.
+
+The open scientific-correctness items are recorded in the audit's "Recorded
+residuals": an apsides-only insertion trim (no plane change), the `enu_basis`
+geodetic-normal residual, the representative RCS station/tank layout with an
+unflown recovery at the new allocation, and the black offscreen solar capture
+path.
 
 ## How do we know it works?
 
@@ -161,8 +185,8 @@ task.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1217 passed, 2 ignored
-cargo test --no-default-features --lib   # 1165 passed, 2 ignored
+cargo test --features dem --lib          # 1227 passed, 2 ignored
+cargo test --no-default-features --lib   # 1175 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -185,9 +209,11 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,209 domain and adapter
-tests pass (1,157 without the `dem` feature) and OpenSpec is strict-clean. The
-realism programme has verified all forty-five tasks.
+The simulator runs and its physics is regression-locked; 1,227 domain and adapter
+tests pass (1,175 without the `dem` feature) and OpenSpec is strict-clean. The
+realism programme has verified all forty-five tasks, and the separate
+scientific-correctness track has closed its per-thruster RCS, source-identity and
+lateral-aerodynamics items with the residuals recorded.
 
 The last three slices each closed a defect that screenshots alone could not
 explain, by building the instrument the question needed first. The sea surface
@@ -317,3 +343,16 @@ invented was the renderer: the ocean cap had used its half-metre depth-test lift
 as the wet/dry threshold, so every measured plain within half a metre of the sea
 was drawn as water. The lift now belongs to the surface only; classification
 follows the datum, and the measured plain at 0.28–0.46 m stays land.
+
+The scientific-correctness track closed three more items with the same discipline.
+The RCS was not missing authority but a model: actuation had one scalar clamp and
+the ascent sent the full PID torque to both the gimbals and the RCS, so the
+hardware duplication was the defect. A representative per-thruster cluster now
+owns the torque envelope and the gimbals keep the primary command. The lateral
+aero anisotropy was a genuine non-invariance — an axisymmetric body cannot have a
+1.5 pitch-plane and a 0.8 yaw-plane slope without a physical reason — so both
+planes now use 1.5 and a roll-rotation test pins it. And the Falcon 9 source is
+not pinned because the cited page is mutable vendor HTML: the audit records that
+refusal instead of inventing a checksum, while run identity still pins the loaded
+configuration bytes. The flight numbers moved by 0.33 km in apsis and 42.5 kg of
+RCS propellant, attributed rather than rounded away.

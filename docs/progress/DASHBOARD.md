@@ -1,7 +1,7 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-09.
-Last code checkpoint: `0e333b0` (2026-11-10).
+Snapshot date: 2026-11-11.
+Last code checkpoint: `70bfef5` (2026-11-11).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,15 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 0e333b0 |
-| `cargo check --all-targets --features dem` | PASS | 0e333b0 |
-| `cargo check --no-default-features` | PASS | 0e333b0 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 0e333b0 |
-| `cargo test --features dem --lib` | 1217 passed, 0 failed, 2 ignored | 0e333b0 |
-| `cargo test --no-default-features --lib` | 1165 passed, 0 failed, 2 ignored | 0e333b0 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 0e333b0 |
-| `cargo build --release --features dem` | PASS | 0e333b0 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 0e333b0 |
+| `cargo fmt --check` | PASS | 70bfef5 |
+| `cargo check --all-targets --features dem` | PASS | 70bfef5 |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 70bfef5 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 70bfef5 |
+| `cargo test --features dem --lib` | 1227 passed, 0 failed, 2 ignored | 70bfef5 |
+| `cargo test --no-default-features --lib` | 1175 passed, 0 failed, 2 ignored | 70bfef5 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 70bfef5 |
+| `cargo build --release --features dem` | PASS | 70bfef5 |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 70bfef5 |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant | 70bfef5 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -133,16 +134,20 @@ AutoVsync quantizes to about 1 s per present on this PRIME display; worst frame,
 GPU pass time, draw calls and triangle counts are still unexposed by telemetry.
 
 Extension work is a separate scientific-correctness track, not remaining roadmap
-items. It is open and recorded in `docs/scientific_correctness_audit.md`: seven
-defects fixed (retro-propulsion applied to powered ascents; insertion targeting
-the geodetic instead of geocentric site latitude; inclination measured about the
-geometric pole instead of the rotation axis, which required re-recording
-`leo-insertion-safe`; the Falcon 9 catalog's 5.4 g thrust-to-weight on legacy
-test masses, now public Block 5 masses at 1.41 g; an insertion trim that started
-before the apsis and consumed the upper stage's ignition budget without
-circularizing; an undefined body lateral-axis convention whose static-margin
-comment described the opposite sign; and an ascent attitude target that
-commanded a ~4 rad roll slew at liftoff, forcing a 5e7 N·m RCS clamp) and two
-audited items (frame handedness and per-thruster RCS allocation). Preserving the
-pad roll cut the RCS requirement to 5e3 N·m; the per-thruster model remains the
-gap. A headless Falcon 9 flight now circularizes at 200.85 x 199.24 km.
+items. It is recorded in `docs/scientific_correctness_audit.md` and now has three
+more closed items on 2026-11-11: SC-04 adds a representative per-thruster RCS
+cluster with allocation, failure, minimum-impulse and propellant draw, and makes
+gimbals supply the primary pitch/yaw command while RCS supplies only the residual
+(the old ascent path doubled pitch/yaw authority); SC-06 records why the mutable
+SpaceX vehicle page cannot honestly be byte-pinned, so the Falcon 9 entry stays
+`Representative` and reproducibility stays pinned by `configuration_sha256`; and
+SC-03 equalises the two lateral aerodynamic slopes at 1.5 per radian so the
+axisymmetric airframe is roll-invariant. The headless Falcon 9 flight circularizes
+at 201.1783 x 199.9759 km with 42.483 kg of RCS propellant used.
+
+The residuals are recorded rather than hidden: the RCS cluster is a
+representative single-arm pure-couple set drawing from the final stage main tank,
+no flight exercises a failed thruster, and the booster recovery was not re-flown
+at the new allocation. The insertion law also still trims apsides only, the
+`enu_basis` residual remains, and SC-06 needs a dated immutable source before it
+can be promoted.

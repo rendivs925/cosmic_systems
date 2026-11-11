@@ -17,10 +17,10 @@ least one test, not runtime-verified flight.
 | --- | --- | --- |
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
-| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **PARTIAL — roll fix cut the authority to 5e3 N·m; thruster model still a gap** |
+| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; CP comment corrected** |
+| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery flight not re-flown** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight** |
-| SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; still Representative** |
+| SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
 | SC-08 | Orbital inclination measured from the geometric pole instead of the rotation axis | **DEFECT — fixed; one baseline regenerated** |
 
@@ -147,14 +147,21 @@ controller". The comment now says the torque destabilizes the pitch/yaw axes and
 the controller must actively stabilize them; a new test pins
 `cop.y > com.y` for a fueled vehicle.
 
-**Residual — the two lateral slopes are not equal.** The coefficients apply
-`1.5·α_x` to the X plane and `−0.8·β_z` to the Z plane. For an axisymmetric body
-with no fins this anisotropy is arbitrary: roll about `+Y` is not anchored during
-coast, so the same world-relative flow can rotate between the two planes. The
-model is therefore not roll-invariant. Changing the slopes would change the
-aerodynamic torque and the three committed baselines, so it remains a modeling
-decision; the module doc records it as an approximation rather than a geometry
-result.
+**Resolved — equal lateral slopes.** The coefficients used to apply `1.5·α_x` to
+the X plane and `−0.8·β_z` to the Z plane. For an axisymmetric body with no fins
+that anisotropy was arbitrary: roll about `+Y` is not anchored during coast, so
+the same world-relative flow could rotate between the two planes and the model
+was not roll-invariant. Both planes now use the common
+`LATERAL_NORMAL_FORCE_SLOPE_PER_RAD = 1.5` (only the sign convention differs),
+retaining the validated pitch-plane magnitude. A domain test pins equal
+coefficient and force magnitudes for the same flow angle rotated 90° about the
+longitudinal axis. The three committed baselines are unchanged: the gravity-turn
+harness is pitch-plane only, so the yaw slope was unexercised there. The real 3D
+Falcon 9 flight is also essentially unchanged (accepted orbit
+201.1745 → 201.1783 × 199.9722 → 199.9759 km, final mass 23,858.333 →
+23,858.331 kg), which confirms the nominal ascent is pitch-plane dominated; the
+value of the change is roll invariance for off-nominal/3D flow, not a
+trajectory improvement. No fixture was re-recorded.
 
 **Residual — telemetry labels.** The presentation layer already names
 `roll_rate = ω_y`, `pitch_rate = ω_x`, `yaw_rate = ω_z`, so the pitch-plane flow
@@ -170,56 +177,113 @@ would change the aerodynamic torque and the three committed baselines.
 
 ## SC-04 — Per-thruster RCS allocation
 
-**Gap as found.** Actuation clamps a commanded body torque to a scalar
-`max_rcs_torque_nm` per axis (`clamp_rcs_torque`). There are no RCS thruster
+**Gap as found.** Actuation clamped a commanded body torque to a scalar
+`max_rcs_torque_nm` per axis (`clamp_rcs_torque`). There were no RCS thruster
 entities, no torque-to-thruster allocation, no propellant draw, and no
-minimum-impulse quantization. The controller gives gimbals the pitch/yaw
-command and RCS the remainder including roll; grid fins, when fitted, are mixed
+minimum-impulse quantization. The controller gave gimbals the pitch/yaw command
+and RCS the remainder including roll; grid fins, when fitted, are mixed
 separately.
 
-**Verdict.** GAP for the thruster model; the control-authority blocker is
-**resolved**. The vehicle has torque authority on three axes but not a
-thruster-level model. Landing and coast burns are not sensitive to thruster
-placement, and an asymmetric or failed thruster cannot be represented.
-
-**Root cause of the authority demand (2026-11-09/10).** Lowering
+**Root cause of the former authority demand (2026-11-09/10).** Lowering
 `max_rcs_torque_nm` on the old code made the ascent fail: 2.0e4 lost control at
 ~T+145 s, 1.0e5 cut at 100 km and only 1,873 m/s, and 5.0e5 was the first stable
 case. Instrumenting the fixed tick showed a 4.07 rad attitude error at t=0 with
-the engine still off and a 38 MN·m torque command. The ascent guidance used
+the engine still off and a 38 MN·m torque command. Ascent guidance used
 `attitude_from_direction`, a shortest-arc rotation from body +Y to the target
-direction that leaves **roll arbitrary**. The pad attitude from
-`orientation_from_up_and_heading` has a specific roll, so the guidance commanded
-a ~233° roll slew at liftoff. The huge RCS clamp existed to execute that slew.
+direction that leaves **roll arbitrary**. The pad attitude has a specific roll,
+so guidance commanded a ~233° roll slew at liftoff. The huge RCS clamp existed
+to execute that slew. `roll_preserving_attitude_from_direction` removed it: the
+initial attitude error is now ~1e-16 rad and the default authority is 5.0e3 N·m,
+a representative cluster scale.
 
-**Fix.** `roll_preserving_attitude_from_direction(direction, current)` rotates
-the current attitude by the shortest arc from its current longitudinal axis to
-the new direction, so roll is preserved and the relative rotation has no
-component about body +Y. Ascent guidance now uses it for the vertical hold, the
-gravity turn, the radial-velocity trim, and the unreachable-heading fallback. A
-launch vehicle without a roll program should not roll at liftoff.
+**Implemented model (2026-11-11).** `domain::services::rcs` owns a representative
+six-thruster pure-couple cluster, one thruster for each sign of each body torque
+axis at a fixed 2 m arm. The catalogue has no public RCS stations or tank
+geometry, so this is deliberately a representative set, not a hardware model.
+`RcsCluster::allocate(torque_cmd, dt, available_propellant_kg)` is the single
+owner of:
 
-**Measured after the fix.** With the roll-preserving target, the initial
-attitude error is ~1e-16 rad and the ascent reaches the target apoapsis with
-`max_rcs_torque_nm` as low as 100 N·m (and 0 still reaches the ascent cut
-because the gimbals carry pitch/yaw and no roll is commanded). The full 5,400 s
-insertion was flown at 2.0e4 and 5.0e3 N·m; both circularize. The default is now
-**5.0e3 N·m**, a representative physical cluster scale (a few kN of thrust at a
-few metres), and the final orbit is 200.85 × 199.24 km (e = 0.00012). The
-earlier 5e7 authority was an artifact of the roll slew, not a physical RCS
-budget. Validation scope: the 5e3 authority is flown through ascent and
-insertion and exercised by the landing/recovery tests; a complete booster
-recovery flight was not re-flown in this change.
+- **authority** — each thruster's full-duty torque equals the validated per-axis
+  authority; `saturated` reports a command that could not be met because the
+  axis is out of authority, a thruster failed, the minimum impulse dropped the
+  pulse, or the tank could not supply the mass;
+- **failure** — `set_failed` removes that sign's authority only (the opposite
+  thruster and the other axes remain usable);
+- **minimum impulse** — a pulse below 0.1 N·s is dropped and reported as not
+  exact;
+- **propellant draw** — mass flow from the allocated duties at the final stage's
+  vacuum Isp, scaled down when the tank is the binding constraint.
 
-**Baselines.** `ascent-gravity-turn` and `leo-insertion-safe` were re-recorded
-through `scripts/regression/save_baseline.sh` because the attitude target and
-the actuator limit changed. `ascent` (the first 4 s, before the turn) is
-unchanged. The baseline README records the reason.
+`RocketRcs` is an optional component. Minimal harnesses without it keep the
+validated per-axis clamp path; spawned vehicles get the cluster. `actuation_system`
+does not pre-clamp the hardware path, so the authority rule exists in exactly one
+place.
 
-**Still open.** The per-thruster model itself: placement, failure, propellant
-draw, and minimum-impulse quantization. The authority is now physically sized,
-so the next change can add a representative cluster at this envelope without
-carrying MN-class fake hardware.
+**Gimbal/RCS split.** Gimbals receive the primary pitch/yaw command in every
+phase; RCS supplies the residual `τ_cmd − τ_gimbal`, which includes roll because
+the gimbal allocator solves only the pitch (X) and yaw (Z) equations. This does
+not reintroduce double authority: physics sums the gimbal torque produced by the
+deflected thrust and the allocated RCS torque, and the two are constructed to add
+up to the PID command once. The old ascent path sent the full command to both,
+which doubled pitch/yaw authority and, with a real propellant draw, would have
+burned RCS mass for torque the gimbals were already producing.
+
+**Propellant accounting.** A single RCS tick draws far below the f32 resolution
+of a ~100 t stage tank. `RocketRcs` accumulates the exact f64 draw and drains the
+f32 inventory in 0.05 kg chunks; `propellant_used_kg` remains the exact total.
+The drain is clamped by the tank, so the inventory can never go negative.
+
+**Measured headless Falcon 9 (Starbase, 5,400 s, 5.0e3 N·m, deterministic).**
+
+| quantity | pre-per-thruster (976f998) | post (this change) |
+| --- | --- | --- |
+| stage separation | T+144.219 s | T+144.219 s |
+| ascent cut | T+448.219 s, 137.0897 km, 7,824.610 m/s | T+448.203 s, 137.0761 km, 7,824.236 m/s |
+| circularization | T+1,727.672–1,728.875 s | T+1,719.453–1,720.672 s |
+| accepted orbit | 200.847 × 199.238 km | 201.175 × 199.972 km |
+| RCS propellant | not modelled | 42.488 kg |
+| final mass at T+5,400 s | 23,901.016 kg | 23,858.333 kg |
+
+The ±0.7 km apsis shift and the 8.2 s earlier circularization follow from an
+ascent cut one tick earlier and 0.37 m/s lower, which is the expected effect of
+carrying 42.5 kg less mass and splitting the pitch/yaw torque instead of doubling
+it. The 42.683 kg final-mass difference is 42.488 kg of RCS propellant plus
+0.195 kg more main-engine propellant in the slightly different trim burn. The
+orbit remains inside every acceptance condition; this is attribution, not drift
+that was rounded away.
+
+**Tests.** Six domain tests pin the pure-couple geometry, allocation, saturation,
+failure, minimum impulse, and tank-limited scaling. Two ECS tests run the real
+`actuation_system`: a commanded X torque appears in `TorqueAccumulator` and
+decreases the final-stage tank, and a failed +X thruster leaves no +X authority.
+SC-04 adds those eight tests; with the two later SC-03/SC-06 guards the tree
+measures 1,227 passed with `dem` and 1,175 without.
+
+**Baselines.** `ascent-gravity-turn` was re-recorded through
+`scripts/regression/save_baseline.sh` because the gimbal/RCS split changes the
+pitch/yaw torque allocation in the recorded window: the old path applied the
+full command to both actuators, so the earlier fixture contains small RCS-driven
+rates that no longer exist. `ascent` (first 4 s) and `leo-insertion-safe` (a
+vacuum insertion state) are unchanged. The baseline README records the reason.
+
+**Residuals — implemented scope, not hardware or fully flown scope.**
+
+1. The cluster is a representative pure-couple six-thruster set at a fixed 2 m
+   arm. It is not a catalogued station layout, and the arm does not move with the
+   center of mass.
+2. There are no catalogued RCS tanks. Propellant is drawn from the final serial
+   stage's main tank at that stage's vacuum Isp, which is a documented
+   simplification of a separate RCS propellant system.
+3. Thruster failure is representable in the model and tested, but no flight
+   scenario exercises a failed thruster.
+4. A complete booster-recovery flight was **not** re-flown at the new authority.
+   The landing/recovery tests exercise the envelope, but recovery remains
+   IMPLEMENTED-tested, not flight-verified at this allocation.
+
+**Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
+minimum-impulse, and propellant paths are unit- and system-tested and are
+exercised by the 5,400 s headless flight. The four residuals above bound the
+claim; recovery and station/tank fidelity remain outside it.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -316,9 +380,27 @@ separation at T+144.2 s shedding 40,600 kg and leaving 112,898 kg of upper
 stage. The three committed flight baselines use the Electron-like fixture, not
 the catalog, so they are unchanged.
 
-**Still open.** The source byte is not pinned, so this is not `SourceVerified`;
-and the representative trajectory means every number above is conditional on
-the assumptions listed in the file header.
+**Source identity (2026-11-11) — deliberately unpinned, with the reason
+recorded.** The entry stays `Representative` and claims no `sha256`. The cited
+URL is SpaceX's mutable vehicle page: HTML whose content changes without a
+versioned, immutable edition. This offline workspace holds no retrieved snapshot,
+so hashing the live page would name an artifact a later reader cannot retrieve.
+Rather than fabricate a citation or a checksum, `falcon9.ron` now states that
+reason in its header and in `provenance.representative_rationale`, and the test
+`falcon9_records_that_its_web_source_cannot_be_byte_pinned` asserts the
+`Representative` basis, the absent hash, and the recorded reason. This is the
+explicit "byte pinning is not possible for this public web source" outcome, not
+a silent gap.
+
+Reproducibility is pinned at a different layer: the loader hashes the
+configuration file into `configuration_sha256`, and every simulation run identity
+records it. That pins the *vehicle definition bytes* the trajectory was flown
+with; it does not make the external source `SourceVerified`.
+
+**Remaining limitation.** The representative trajectory means every number above
+is conditional on the assumptions listed in the file header. A future dated,
+immutable source artifact could promote the entry, but that requires a real
+archived document, not a new hash over the same mutable page.
 
 ## SC-07 — WGS-84 datum audit
 
@@ -436,34 +518,60 @@ Record the choice in the consumer's doc comment.
 
 ---
 
+## Recorded residuals (deliberately not hidden)
+
+These are known remaining gaps. None is called VERIFIED; each stays IMPLEMENTED
+or GAP in the scope where it is untested or unflown.
+
+1. **Insertion trims apsides only.** The circularization law raises the
+   periapsis to the target radius; it never commands a plane change. A
+   plane/inclination error is observed by the acceptance predicate (~±2° at
+   Starbase) and is accepted, not corrected. Fixing it needs a plane-change burn
+   and a new baseline review.
+2. **SC-07 ENU residual.** `enu_basis` builds `up` from the radial at the
+   *geodetic* latitude, not the WGS-84 ellipsoid normal, so local-tangent heights
+   are tilted by up to ≈0.19°. Flight-critical paths do not use it (the launch
+   stand uses the terrain surface normal). Changing it would move every
+   local-tangent consumer, so it remains recorded.
+3. **Solar captures.** Offscreen solar screenshots are black. Windowed F12 frames
+   are the current evidence path; this is a presentation/capture limitation, not
+   a simulation result. It must not be cited as visual verification of anything
+   else.
+4. **RCS fidelity and recovery.** The representative station/tank model and the
+   unflown booster-recovery case are the SC-04 residuals above. They remain
+   implemented/tested scope, not VERIFIED hardware or flight.
+
 ## Next steps, in order of physical impact
 
-1. **SC-04 — add the per-thruster model at the new 5e3 N·m envelope.** The
-   roll-slew fix removed the ~0.5 MN·m requirement, so a representative cluster
-   is now physically sized. Add thruster placement, torque allocation,
-   propellant draw, failure, and minimum-impulse quantization; the torque-level
-   model still cannot represent those or trim a plane error.
-2. **SC-06 — pin the source byte.** Publish a dated Falcon 9 document (or an
-   explicitly dated snapshot) with a checksum, then promote the entry to
-   `SourceVerified`, or state that the vehicle is permanently representative.
-3. **Lateral aerodynamic symmetry.** Decide whether the X and Z normal-force
-   slopes should be equal for the axisymmetric airframe, or whether the
-   asymmetry represents a deliberate (and documented) fin/geometry choice.
-   This changes aerodynamic torque, so it needs a baseline review.
+1. **Trim the orbital plane.** The insertion law now closes both apsides; the
+   remaining orbital-element error is inclination. A bounded plane-change burn
+   (or an ascent-azimuth correction) would close it, but it changes every
+   insertion baseline and needs the same measured A/B used above.
+2. **RCS station/tank fidelity and a recovery flight.** Replace the representative
+   single-arm cluster and final-stage tank draw with a catalogued layout, then fly
+   the booster recovery at the new authority. Until then SC-04's recovery scope
+   is IMPLEMENTED-tested, not flight-verified.
+3. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
+   archived snapshot with a checksum; the current mutable vendor page cannot be
+   pinned honestly.
 
 ## Validation
 
-The gate for this track is the project gate. Counts are the post-change values;
-the previous floor was 1,216 with `dem` and 1,164 without.
+The gate for this track is the project gate, run on `70bfef5`, the last code
+commit of the three changes (the documentation commit that records it changes no
+code). Counts are the post-change values; the previous floor was 1,217 with
+`dem` and 1,165 without.
 
 | check | result |
 | --- | --- |
 | `cargo fmt --check` | PASS |
 | `cargo check --all-targets --features dem` | PASS |
-| `cargo check --no-default-features` | PASS |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,217 passed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,165 passed, 2 ignored |
-| three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero hard-error matches |
-| headless Falcon 9 ascent | ascent cut on the 200.8 km apoapsis at T+448.2 s, one 1.2 s circularization burn, 200.85 x 199.24 km (e = 0.00012) accepted at T+1,728.9 s, stable through 90 min with the 5e3 N·m RCS authority |
-| RCS authority A/B | before the roll fix: 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s. After the roll fix: 5.0e3 (new default) and 2.0e4 both circularize at ~200 x 199 km; 100 N·m still reaches the ascent cut |
+| `cargo test --features dem --lib` | 1,227 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,175 passed, 0 failed, 2 ignored |
+| `openspec validate --all --strict` | 43 passed, 0 failed |
+| `cargo build --release --features dem` | PASS |
+| three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
+| headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
+| RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |
