@@ -147,9 +147,12 @@ at 201.1783 x 199.9759 km with 42.483 kg of RCS propellant used.
 
 The residuals are recorded rather than hidden: the RCS cluster is a
 representative single-arm pure-couple set drawing from the final stage main tank,
-no flight exercises a failed thruster, and the booster recovery was not re-flown
-at the new allocation. The insertion law trims apsides only, but the measured
-plane error is 0.00135°, so no plane-change burn is justified by the current
-flight; the remaining insertion offset is the altitude deadband. The `enu_basis`
-residual remains, and SC-06 needs a dated immutable source before it can be
-promoted.
+no flight exercises a failed thruster, and the booster recovery was flown but does
+not land. The recovery flight exposed and fixed chutes on a landing-gear vehicle
+and repeated crash events; it also left a spinning-contact energy pump, an unset
+pad target and a representative 15 t reserve that boostback consumes entirely, so
+recovery stays IMPLEMENTED-tested. The insertion law trims apsides only, but the
+measured plane error is 0.00135°, so no plane-change burn is justified by the
+current flight; the remaining insertion offset is the altitude deadband. The
+`enu_basis` residual remains, and SC-06 needs a dated immutable source before it
+can be promoted.

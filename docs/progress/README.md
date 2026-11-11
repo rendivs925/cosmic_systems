@@ -181,11 +181,11 @@ of this closes a roadmap task.
 
 The open scientific-correctness items are recorded in the audit's "Recorded
 residuals": the `enu_basis` geodetic-normal residual, the representative RCS
-station/tank layout with an unflown recovery at the new allocation, and the
-black offscreen solar capture path. The insertion law still has no plane-change
-burn, but the flight measures its plane error at 0.00135°, so that is a
-capability gap for off-nominal insertion rather than a defect on the current
-trajectory.
+station/tank layout, a recovery flight that now runs but does not land, the
+spinning-wreck contact model, and the black offscreen solar capture path. The
+insertion law still has no plane-change burn, but the flight measures its plane
+error at 0.00135°, so that is a capability gap for off-nominal insertion rather
+than a defect on the current trajectory.
 
 ## How do we know it works?
 
