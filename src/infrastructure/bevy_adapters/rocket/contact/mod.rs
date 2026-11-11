@@ -363,12 +363,16 @@ pub fn resolve_ground_contact(
             continue;
         }
 
-        if signed_altitude_m < 0.0 {
+        // Position projection is independent of the verdict. Velocity is
+        // resolved after the verdict: a crash absorbs the contact-point normal
+        // speed with a linear-plus-angular impulse, while a landed contact keeps
+        // the existing resting projection.
+        let com_speed_before_contact_mps = rocket.dynamics.velocity_mps.length();
+        let angular_speed_before_contact_radps = rocket.dynamics.angular_velocity_radps.length();
+        let penetrating = signed_altitude_m < 0.0;
+        if penetrating {
             let radial_dir = contact_position_m.normalize_or_zero();
             rocket.dynamics.position_m = radial_dir * surface_radius_m - lower_offset_world_m;
-            let into_ground = velocity.dot(normal).min(0.0);
-            rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity
-                - angular_velocity_world_radps.cross(lower_offset_world_m);
         }
 
         // A terminal verdict is valid only at the sampled contact plane. The
@@ -404,6 +408,29 @@ pub fn resolve_ground_contact(
                 -components.normal_mps
             );
             verdict = GroundContact::Crash;
+        }
+        if penetrating {
+            if verdict == GroundContact::Crash {
+                // A tumbling body carries a large contact-point speed even when
+                // its center of mass is slow. Correcting the center of mass by
+                // that point speed alone (the old projection) pumped energy into
+                // the wreck and launched it off the surface. Absorb the normal
+                // closing speed with an impulse applied at the contact point, so
+                // the same impulse changes translation and rotation.
+                let impulse_n_s =
+                    rocket
+                        .dynamics
+                        .contact_normal_impulse(lower_offset_world_m, normal, velocity);
+                if impulse_n_s > 0.0 {
+                    rocket
+                        .dynamics
+                        .apply_contact_impulse(normal * impulse_n_s, lower_offset_world_m);
+                }
+            } else {
+                let into_ground = velocity.dot(normal).min(0.0);
+                rocket.dynamics.velocity_mps = velocity - normal * into_ground + surface_velocity
+                    - angular_velocity_world_radps.cross(lower_offset_world_m);
+            }
         }
         collision.ground_contact = verdict;
 
@@ -496,8 +523,8 @@ pub fn resolve_ground_contact(
                         -components.normal_mps,
                         components.lateral_mps,
                         tilt_deg,
-                        rocket.dynamics.velocity_mps.length(),
-                        rocket.dynamics.angular_velocity_radps.length()
+                        com_speed_before_contact_mps,
+                        angular_speed_before_contact_radps
                     );
                     crash_writer.write(CrashEvent {
                         rocket: rocket_entity,

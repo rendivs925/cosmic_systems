@@ -91,6 +91,58 @@ impl RocketDynamicsState {
         let delta = DQuat::from_scaled_axis(self.angular_velocity_radps * dt);
         self.orientation = (self.orientation * delta).normalize();
     }
+
+    /// Normal impulse for a perfectly inelastic contact at `offset_world_m`
+    /// from the center of mass. Returns zero when the contact point is already
+    /// separating. The denominator is the contact-point effective inverse mass
+    /// `1/m + ((I⁻¹(r × n)) × r)·n`, so the impulse changes translation and
+    /// rotation together instead of applying the full point-velocity correction
+    /// to the center of mass alone.
+    pub fn contact_normal_impulse(
+        &self,
+        offset_world_m: DVec3,
+        normal_world: DVec3,
+        contact_velocity_mps: DVec3,
+    ) -> f64 {
+        let closing_speed_mps = contact_velocity_mps.dot(normal_world);
+        if closing_speed_mps >= 0.0 || self.mass_kg <= 0.0 {
+            return 0.0;
+        }
+        let mut inverse_effective_mass = 1.0 / self.mass_kg;
+        if self.inertia_body.determinant().abs() > 1e-12 {
+            let r_cross_n_body = self.orientation.inverse() * offset_world_m.cross(normal_world);
+            let angular_velocity_per_impulse_body = self.inertia_body.inverse() * r_cross_n_body;
+            let angular_term = (self.orientation * angular_velocity_per_impulse_body)
+                .cross(offset_world_m)
+                .dot(normal_world);
+            if angular_term.is_finite() {
+                inverse_effective_mass += angular_term;
+            }
+        }
+        if !inverse_effective_mass.is_finite() || inverse_effective_mass <= 0.0 {
+            return 0.0;
+        }
+        -closing_speed_mps / inverse_effective_mass
+    }
+
+    /// Apply an inertial-frame impulse at `offset_world_m` from the center of
+    /// mass. The angular impulse is rotated into the body frame before the
+    /// body-frame inertia tensor is applied, because angular velocity and
+    /// inertia live in the body frame.
+    pub fn apply_contact_impulse(&mut self, impulse_world_n_s: DVec3, offset_world_m: DVec3) {
+        if self.mass_kg > 0.0 {
+            self.velocity_mps += impulse_world_n_s / self.mass_kg;
+        }
+        if self.inertia_body.determinant().abs() <= 1e-12 {
+            return;
+        }
+        let angular_impulse_body =
+            self.orientation.inverse() * offset_world_m.cross(impulse_world_n_s);
+        let delta_omega_radps = self.inertia_body.inverse() * angular_impulse_body;
+        if delta_omega_radps.is_finite() {
+            self.angular_velocity_radps += delta_omega_radps;
+        }
+    }
 }
 
 /// Construct a body-to-world orientation whose longitudinal +Y axis follows
@@ -415,5 +467,75 @@ mod tests {
             inertia.x_axis.x > without_payload.x_axis.x,
             "attached payload must contribute transverse inertia"
         );
+    }
+
+    fn kinetic_energy_j(state: &RocketDynamicsState) -> f64 {
+        0.5 * state.mass_kg * state.velocity_mps.length_squared()
+            + 0.5
+                * state
+                    .angular_velocity_radps
+                    .dot(state.inertia_body * state.angular_velocity_radps)
+    }
+
+    #[test]
+    fn central_contact_impulse_removes_normal_speed_without_spin() {
+        let mut state = test_state();
+        state.velocity_mps = DVec3::new(0.0, -10.0, 0.0);
+        let offset = DVec3::new(0.0, -35.0, 0.0);
+        let normal = DVec3::Y;
+
+        let impulse = state.contact_normal_impulse(offset, normal, state.velocity_mps);
+        assert!((impulse - state.mass_kg * 10.0).abs() < 1e-6);
+        state.apply_contact_impulse(normal * impulse, offset);
+
+        assert!(state.velocity_mps.length() < 1e-9);
+        assert!(state.angular_velocity_radps.length() < 1e-12);
+    }
+
+    #[test]
+    fn offset_spin_contact_impulse_zeroes_the_contact_point_speed() {
+        let mut state = RocketDynamicsState::new(
+            DVec3::ZERO,
+            DVec3::new(2.0, -10.0, 0.0),
+            DQuat::IDENTITY,
+            1_000.0,
+            DMat3::from_diagonal(DVec3::new(100.0, 200.0, 100.0)),
+            DVec3::ZERO,
+        );
+        state.angular_velocity_radps = DVec3::new(0.0, 0.0, 3.0);
+        let offset = DVec3::new(1.0, -5.0, 0.0);
+        let normal = DVec3::Y;
+        let contact_before = state.velocity_mps + state.angular_velocity_radps.cross(offset);
+        let energy_before = kinetic_energy_j(&state);
+
+        let impulse = state.contact_normal_impulse(offset, normal, contact_before);
+        assert!(impulse > 0.0);
+        state.apply_contact_impulse(normal * impulse, offset);
+
+        let contact_after = state.velocity_mps + state.angular_velocity_radps.cross(offset);
+        assert!(
+            contact_after.dot(normal).abs() < 1e-9,
+            "contact-point normal speed must be absorbed: {}",
+            contact_after.dot(normal)
+        );
+        assert!(
+            kinetic_energy_j(&state) < energy_before,
+            "an inelastic contact impulse must not add energy"
+        );
+        assert!(
+            state.angular_velocity_radps.length() > 3.0,
+            "the offset impulse must transfer part of the correction into spin"
+        );
+    }
+
+    #[test]
+    fn separating_contact_needs_no_impulse() {
+        let state = test_state();
+        let impulse = state.contact_normal_impulse(
+            DVec3::new(0.0, -35.0, 0.0),
+            DVec3::Y,
+            DVec3::new(0.0, 2.0, 0.0),
+        );
+        assert_eq!(impulse, 0.0);
     }
 }

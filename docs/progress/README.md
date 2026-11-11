@@ -47,13 +47,16 @@ unchanged. The headless Falcon 9 flight now closes at 201.1783 x 199.9759 km wit
 42.483 kg of RCS propellant used. The booster recovery was then flown on the same
 flight and exposed two real defects: a landing-gear vehicle deployed parachutes
 because the chute model is per-body, and a wreck re-published a crash every fixed
-tick. Both are fixed and tested. The return itself still does not land — the
-representative 15 t reserve is consumed by boostback, the scenario leaves the pad
-target unset, and the crash exposes a spinning-contact energy pump — so recovery
-remains IMPLEMENTED-tested, not flight-verified. What that does *not* claim is
-recorded in the audit: the cluster is representative, a failed-thruster flight was
-not flown, recovery is not verified, and the insertion law still trims apsides
-only.
+tick. Both are fixed and tested. The crash also exposed a spinning-contact energy
+pump: the old projection corrected the center of mass by the contact-point speed
+without an angular impulse and launched the wreck onto a 739 km arc. A
+linear-plus-angular contact impulse now keeps it on the surface. The return itself
+still does not land — the representative 15 t reserve is consumed by boostback,
+the scenario leaves the pad target unset, and a water crash resolves against the
+sea floor rather than the sea surface — so recovery remains IMPLEMENTED-tested,
+not flight-verified. What that does *not* claim is recorded in the audit: the
+cluster is representative, a failed-thruster flight was not flown, recovery is not
+verified, and the insertion law still trims apsides only.
 
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
@@ -182,7 +185,7 @@ of this closes a roadmap task.
 The open scientific-correctness items are recorded in the audit's "Recorded
 residuals": the `enu_basis` geodetic-normal residual, the representative RCS
 station/tank layout, a recovery flight that now runs but does not land, the
-spinning-wreck contact model, and the black offscreen solar capture path. The
+sea-floor water-impact model, and the black offscreen solar capture path. The
 insertion law still has no plane-change burn, but the flight measures its plane
 error at 0.00135°, so that is a capability gap for off-nominal insertion rather
 than a defect on the current trajectory.
@@ -193,8 +196,8 @@ than a defect on the current trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1229 passed, 2 ignored
-cargo test --no-default-features --lib   # 1177 passed, 2 ignored
+cargo test --features dem --lib          # 1232 passed, 2 ignored
+cargo test --no-default-features --lib   # 1180 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -217,8 +220,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,229 domain and adapter
-tests pass (1,177 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,232 domain and adapter
+tests pass (1,180 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.
