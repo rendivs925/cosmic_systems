@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-11.
-Last code checkpoint: `70bfef5` (2026-11-11).
+Last code checkpoint: `feb8bfe` (2026-11-11).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,16 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 70bfef5 |
-| `cargo check --all-targets --features dem` | PASS | 70bfef5 |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 70bfef5 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 70bfef5 |
-| `cargo test --features dem --lib` | 1227 passed, 0 failed, 2 ignored | 70bfef5 |
-| `cargo test --no-default-features --lib` | 1175 passed, 0 failed, 2 ignored | 70bfef5 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 70bfef5 |
-| `cargo build --release --features dem` | PASS | 70bfef5 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 70bfef5 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant | 70bfef5 |
+| `cargo fmt --check` | PASS | feb8bfe |
+| `cargo check --all-targets --features dem` | PASS | feb8bfe |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | feb8bfe |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | feb8bfe |
+| `cargo test --features dem --lib` | 1227 passed, 0 failed, 2 ignored | feb8bfe |
+| `cargo test --no-default-features --lib` | 1175 passed, 0 failed, 2 ignored | feb8bfe |
+| `openspec validate --all --strict` | 43 passed, 0 failed | feb8bfe |
+| `cargo build --release --features dem` | PASS | feb8bfe |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | feb8bfe |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant | feb8bfe |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

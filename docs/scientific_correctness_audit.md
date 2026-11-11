@@ -568,10 +568,10 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on `70bfef5`, the last code
-commit of the three changes (the documentation commit that records it changes no
-code). Counts are the post-change values; the previous floor was 1,217 with
-`dem` and 1,165 without.
+The gate for this track is the project gate, run on `feb8bfe`, which adds only
+the inclination fields to the autopilot mode-edge log; the functional state is
+the three commits ending at `70bfef5`. Counts are unchanged by the log fields.
+The previous floor was 1,217 with `dem` and 1,165 without.
 
 | check | result |
 | --- | --- |
