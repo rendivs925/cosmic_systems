@@ -958,6 +958,21 @@ pub struct GroundRest {
     pub active: bool,
 }
 
+/// Number of engines in the active stage commanded to run for the current
+/// burn. Recovery burns use three engines for boostback/entry and one for the
+/// landing burn; without this selection the full nine-engine stage would be
+/// lit and the thrust would swamp the attitude controller.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineSelection {
+    pub active_count: u32,
+}
+
+impl EngineSelection {
+    pub fn new(active_count: u32) -> Self {
+        Self { active_count }
+    }
+}
+
 /// Grid-fin actuator state on a recovering stage. Guidance/control writes the
 /// deflections; the aerodynamic force writer reads them. The installation is
 /// immutable for the flight, so the spec lives beside the live deflection.

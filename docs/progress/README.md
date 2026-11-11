@@ -55,14 +55,17 @@ inherits the launch site and targets the rotating pad, and four grid fins hold i
 engines-first through entry (body rate below 0.5 rad/s through the dynamic-
 pressure rise, versus 209 rad/s before), so the entry tumble is fixed. The return
 still does not land: the 15 t reserve is consumed by boostback and the stage
-crashes 744.67 km short at 342.66 m/s. A 25 t reserve preserves insertion and
+crashes 745.71 km short at 325.82 m/s. A 25 t reserve preserves insertion and
 improves the crash to 549.01 km short at 305.62 m/s, but still does not land; 40 t
-breaks the ascent, so the committed reserve stays 15 t. A water crash also
-resolves against the sea floor rather than the sea surface. Recovery energy
-sequencing remains IMPLEMENTED-tested, not flight-verified. What that does *not*
-claim is recorded in the audit: the RCS cluster and grid-fin geometry are
-representative, a failed-thruster flight was not flown, recovery is not
-verified, and the insertion law still trims apsides only.
+breaks the ascent, so the committed reserve stays 15 t. The center engine and
+one-engine subset are now committed, but a 25 t follow-up reaches powered descent
+with propellant left and still cannot align the terminal flip against the
+aerodynamic load; a shallow downrange entry also lifts and skips. A water crash
+resolves against the sea floor rather than the sea surface. Recovery
+terminal-attitude authority remains IMPLEMENTED-tested, not flight-verified. What
+that does *not* claim is recorded in the audit: the RCS cluster and grid-fin
+geometry are representative, a failed-thruster flight was not flown, recovery is
+not verified, and the insertion law still trims apsides only.
 
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,
@@ -203,8 +206,8 @@ than a defect on the current trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1240 passed, 2 ignored
-cargo test --no-default-features --lib   # 1188 passed, 2 ignored
+cargo test --features dem --lib          # 1242 passed, 2 ignored
+cargo test --no-default-features --lib   # 1190 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -227,8 +230,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,240 domain and adapter
-tests pass (1,188 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,242 domain and adapter
+tests pass (1,190 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.

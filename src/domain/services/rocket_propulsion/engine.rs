@@ -146,6 +146,18 @@ pub fn stage_thrust_body(
     (force, mass_flow)
 }
 
+/// Number of engines in the active stage selected for the current burn.
+/// `None` means the complete stage, preserving nominal ascent behavior. The
+/// catalog lists the center engine first and the ring in opposite pairs, so any
+/// odd selected count (3, 5, 7) remains axisymmetric.
+pub fn engine_subset(engines: &[RocketEngine], active_count: Option<u32>) -> &[RocketEngine] {
+    let count = active_count
+        .map(|count| count as usize)
+        .unwrap_or(engines.len())
+        .min(engines.len());
+    &engines[..count]
+}
+
 /// Maximum thrust available to guidance before an engine is commanded to run.
 /// Off engines with remaining ignition budget are startable; terminally
 /// depleted engines are not. This is a planning capability only: physical

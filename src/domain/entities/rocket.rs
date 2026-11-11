@@ -270,27 +270,46 @@ impl Rocket {
         // Two-stage Falcon 9 at public Block 5 figures: 29 600 kg dry,
         // 518 000 kg propellant, 7 607 kN total first-stage thrust, 282/311 s
         // ISP, 981 kN Merlin Vacuum at 348 s, 5° gimbal, 3.7 m diameter,
-        // 70 m height. Kept field-equivalent to `assets/configs/rockets/
-        // falcon9.ron` by `falcon9_ron_matches_hardcoded_domain_model`.
-        let stage1_engines = (0..9)
-            .map(|i| {
-                let angle = i as f32 * 2.0 * std::f32::consts::PI / 9.0;
-                RocketEngine {
-                    position_m: Vec3::new(1.2 * angle.cos(), -20.6, 1.2 * angle.sin()),
-                    thrust_axis: Vec3::Y,
-                    isp_sea_level: 282.0,
-                    isp_vacuum: 311.0,
-                    gimbal_range_deg: 5.0,
-                    rated_thrust_kn: 7607.0 / 9.0,
-                    thrust_reference: ThrustReference::SeaLevel,
-                    throttle_min: 0.0,
-                    throttle_max: 1.0,
-                    max_ignitions: 3,
-                    ignition_count: 1,
-                    state: EngineState::Running,
-                }
-            })
-            .collect::<Vec<_>>();
+        // 70 m height. The first stage has one center Merlin plus eight ring
+        // engines; the center is first so a one-engine recovery burn selects
+        // it. Kept field-equivalent to `assets/configs/rockets/falcon9.ron` by
+        // `falcon9_ron_matches_hardcoded_domain_model`.
+        let stage1_engines = std::iter::once(RocketEngine {
+            position_m: Vec3::new(0.0, -20.6, 0.0),
+            thrust_axis: Vec3::Y,
+            isp_sea_level: 282.0,
+            isp_vacuum: 311.0,
+            gimbal_range_deg: 5.0,
+            rated_thrust_kn: 7607.0 / 9.0,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 0.0,
+            throttle_max: 1.0,
+            max_ignitions: 5,
+            ignition_count: 1,
+            state: EngineState::Running,
+        })
+        .chain(
+            [0.0_f32, 180.0, 45.0, 225.0, 90.0, 270.0, 135.0, 315.0]
+                .into_iter()
+                .map(|angle_deg| {
+                    let angle = angle_deg.to_radians();
+                    RocketEngine {
+                        position_m: Vec3::new(1.2 * angle.cos(), -20.6, 1.2 * angle.sin()),
+                        thrust_axis: Vec3::Y,
+                        isp_sea_level: 282.0,
+                        isp_vacuum: 311.0,
+                        gimbal_range_deg: 5.0,
+                        rated_thrust_kn: 7607.0 / 9.0,
+                        thrust_reference: ThrustReference::SeaLevel,
+                        throttle_min: 0.0,
+                        throttle_max: 1.0,
+                        max_ignitions: 5,
+                        ignition_count: 1,
+                        state: EngineState::Running,
+                    }
+                }),
+        )
+        .collect::<Vec<_>>();
 
         Self {
             name: "Falcon 9".to_string(),

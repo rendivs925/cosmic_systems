@@ -275,6 +275,9 @@ pub fn propulsion_staging(
                     attached_payload_kg: 0.0,
                 },
                 RocketCommands::default(),
+                // The recovery stage selects engines by subset; nine keeps
+                // the full stage until a recovery profile asks otherwise.
+                EngineSelection::new(9),
                 recovery_autopilot,
                 AerodynamicForces::default(),
                 MaxQTracker::default(),

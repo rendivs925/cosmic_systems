@@ -204,20 +204,22 @@ mod tests {
             .sum();
         assert!((rated_thrust_kn - 7_607.0).abs() < 1.0);
 
-        // Stage-local geometry: nine engines on a 1.2 m ring at the stage-1
-        // lower end (y = -20.6 m), one vacuum engine at the stage-2 lower end
-        // (y = -6.6 m).
+        // Stage-local geometry: one center engine and eight engines on a
+        // 1.2 m ring at the stage-1 lower end (y = -20.6 m), one vacuum engine
+        // at the stage-2 lower end (y = -6.6 m).
         assert_eq!(loaded.stages[0].engines.len(), 9);
+        let mut center_engines = 0;
         for engine in &loaded.stages[0].engines {
-            assert!(
-                (engine.position_m.x * engine.position_m.x
-                    + engine.position_m.z * engine.position_m.z
-                    - 1.44)
-                    .abs()
-                    < 1e-4
-            );
+            let radius_squared = engine.position_m.x * engine.position_m.x
+                + engine.position_m.z * engine.position_m.z;
+            if radius_squared < 1e-6 {
+                center_engines += 1;
+            } else {
+                assert!((radius_squared - 1.44).abs() < 1e-4);
+            }
             assert!((engine.position_m.y + 20.6).abs() < 1e-4);
         }
+        assert_eq!(center_engines, 1, "stage 1 needs exactly one center engine");
         assert_eq!(loaded.stages[1].engines.len(), 1);
         assert!((loaded.stages[1].engines[0].position_m.y + 6.6).abs() < 1e-4);
 

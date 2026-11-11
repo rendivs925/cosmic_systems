@@ -1,15 +1,16 @@
 //! Guidance-command control and actuator-limit adapters.
 
 use super::components::{
-    GridFins, RocketAutopilot, RocketCommands, RocketFlightConditions, RocketGeometry,
-    RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRcs, TorqueAccumulator,
+    EngineSelection, GridFins, RocketAutopilot, RocketCommands, RocketFlightConditions,
+    RocketGeometry, RocketMissionState, RocketPhysicsState, RocketPropulsion, RocketRcs,
+    TorqueAccumulator,
 };
 use super::events::{EngineCutoffEvent, EngineIgnitionEvent};
 use crate::domain::entities::rocket::EngineState;
 use crate::domain::services::actuation::{clamp_deflection, clamp_rcs_torque, limit_throttle_slew};
 use crate::domain::services::control::control_torque_body;
 use crate::domain::services::rocket_propulsion::{
-    allocate_gimbal_deflections_at_stage_origin, clamp_throttle_range,
+    allocate_gimbal_deflections_at_stage_origin, clamp_throttle_range, engine_subset,
     ignition_allowed_during_ullage, stage_gimbal_torque_body, stage_throttle_envelope,
 };
 use crate::domain::services::simulation_time::SimulationTime;
@@ -32,6 +33,7 @@ pub fn control_system(
         &mut RocketAutopilot,
         &RocketMissionState,
         Option<&mut GridFins>,
+        Option<&EngineSelection>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep();
@@ -44,6 +46,7 @@ pub fn control_system(
         mut autopilot,
         mission,
         grid_fins,
+        engine_selection,
     ) in rocket_query.iter_mut()
     {
         let gains = autopilot.gains;
@@ -64,6 +67,14 @@ pub fn control_system(
         let Some(stage) = propulsion.active_stage_configuration() else {
             continue;
         };
+        let selected_count = engine_selection.map(|selection| selection.active_count);
+        let selected_engines = engine_subset(&stage.engines, selected_count);
+        // Trimming a nonzero zero-deflection torque is only valid for a
+        // selected subset whose thrust line misses the center of mass. A full
+        // stage keeps the original independent-axis inversion bit-for-bit, so
+        // the existing ascent baselines are untouched.
+        let trim_static_torque =
+            selected_count.is_some_and(|count| (count as usize) < stage.engines.len());
         let terminal_descent = matches!(
             *mission,
             RocketMissionState::PoweredDescent | RocketMissionState::Landing
@@ -79,12 +90,13 @@ pub fn control_system(
             continue;
         };
         let (gimbal_pitch, gimbal_yaw) = allocate_gimbal_deflections_at_stage_origin(
-            &stage.engines,
+            selected_engines,
             stage_origin_in_stack_m,
             rocket.dynamics.center_of_mass_m,
             torque,
             gimbal_throttle,
             conditions.ambient_pressure_pa,
+            trim_static_torque,
         );
         commands.gimbal_pitch_cmd_rad =
             clamp_deflection(gimbal_pitch, autopilot.actuation.max_gimbal_deflection_rad);
@@ -95,7 +107,7 @@ pub fn control_system(
         // doubling the PID authority. The old ascent path sent the full torque
         // to both, which now costs real RCS propellant.
         let gimbal_torque = stage_gimbal_torque_body(
-            &stage.engines,
+            selected_engines,
             stage_origin_in_stack_m,
             rocket.dynamics.center_of_mass_m,
             gimbal_throttle,
@@ -145,10 +157,11 @@ pub fn actuation_system(
         &RocketAutopilot,
         &RocketMissionState,
         Option<&mut RocketRcs>,
+        Option<&EngineSelection>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep_f32();
-    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission, rcs) in
+    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission, rcs, selection) in
         rocket_query.iter_mut()
     {
         if matches!(
@@ -157,7 +170,8 @@ pub fn actuation_system(
         ) {
             propulsion.throttle = 0.0;
             let stage_index = propulsion.active_stage as u32;
-            let (started, stopped) = command_engine_lifecycle(&mut propulsion, false);
+            let (started, stopped) =
+                command_engine_lifecycle(&mut propulsion, false, selected_count(selection));
             write_engine_lifecycle_events(
                 entity,
                 stage_index,
@@ -181,7 +195,9 @@ pub fn actuation_system(
             .vehicle
             .stages
             .get(propulsion.active_stage)
-            .map(|stage| stage_throttle_envelope(&stage.engines))
+            .map(|stage| {
+                stage_throttle_envelope(engine_subset(&stage.engines, selected_count(selection)))
+            })
             .unwrap_or((0.0, 1.0));
         propulsion.throttle = if commands.throttle_cmd <= 0.0 {
             slewed
@@ -190,7 +206,8 @@ pub fn actuation_system(
         };
         let run_commanded = commands.throttle_cmd > 0.0 && propulsion.throttle > 0.0;
         let stage_index = propulsion.active_stage as u32;
-        let (started, stopped) = command_engine_lifecycle(&mut propulsion, run_commanded);
+        let (started, stopped) =
+            command_engine_lifecycle(&mut propulsion, run_commanded, selected_count(selection));
         write_engine_lifecycle_events(
             entity,
             stage_index,
@@ -243,7 +260,11 @@ pub fn actuation_system(
 /// state then drives every downstream force, torque, and mass-flow calculation.
 /// Returns `(engines_started, engines_stopped)` so the caller can publish the
 /// authoritative ignition/cutoff events without re-deriving them elsewhere.
-fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bool) -> (u32, u32) {
+fn command_engine_lifecycle(
+    propulsion: &mut RocketPropulsion,
+    run_commanded: bool,
+    active_count: Option<u32>,
+) -> (u32, u32) {
     let ignition_permitted = ignition_allowed_during_ullage(
         propulsion.time_since_separation_s,
         propulsion.ullage_settle_time_s,
@@ -254,10 +275,15 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
     let mut started = 0;
     let mut stopped = 0;
     if let Some(stage) = propulsion.vehicle.stages.get_mut(propulsion.active_stage) {
-        for engine in &mut stage.engines {
+        let selected = active_count
+            .map(|count| count as usize)
+            .unwrap_or(stage.engines.len())
+            .min(stage.engines.len());
+        for (index, engine) in stage.engines.iter_mut().enumerate() {
             let was_running = engine.state == EngineState::Running;
+            let engine_commanded = run_commanded && index < selected;
             if core_has_propellant {
-                engine.command_lifecycle(run_commanded, ignition_permitted);
+                engine.command_lifecycle(engine_commanded, ignition_permitted);
             } else {
                 engine.deplete();
             }
@@ -283,6 +309,10 @@ fn command_engine_lifecycle(propulsion: &mut RocketPropulsion, run_commanded: bo
         }
     }
     (started, stopped)
+}
+
+fn selected_count(selection: Option<&EngineSelection>) -> Option<u32> {
+    selection.map(|selection| selection.active_count)
 }
 
 fn count_lifecycle_transition(

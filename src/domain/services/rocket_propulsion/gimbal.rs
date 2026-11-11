@@ -83,6 +83,7 @@ pub fn allocate_gimbal_deflections(
     torque_cmd: DVec3,
     thrust_scale: f32,
     ambient_pressure_pa: f64,
+    trim_static_torque: bool,
 ) -> (f32, f32) {
     allocate_gimbal_deflections_at_stage_origin(
         engines,
@@ -91,11 +92,15 @@ pub fn allocate_gimbal_deflections(
         torque_cmd,
         thrust_scale,
         ambient_pressure_pa,
+        trim_static_torque,
     )
 }
 
 /// Allocate gimbal commands using stage-local engine stations translated into
-/// the current attached-stack frame.
+/// the current attached-stack frame. `trim_static_torque` inverts the affine
+/// torque map around the zero-deflection operating point, which a selected
+/// subset needs because its thrust line misses the center of mass. A full
+/// symmetric stage passes `false` and keeps the original inversion bit-for-bit.
 pub fn allocate_gimbal_deflections_at_stage_origin(
     engines: &[RocketEngine],
     stage_origin_in_stack_m: DVec3,
@@ -103,6 +108,7 @@ pub fn allocate_gimbal_deflections_at_stage_origin(
     torque_cmd: DVec3,
     thrust_scale: f32,
     ambient_pressure_pa: f64,
+    trim_static_torque: bool,
 ) -> (f32, f32) {
     if engines.is_empty() {
         return (0.0, 0.0);
@@ -125,16 +131,41 @@ pub fn allocate_gimbal_deflections_at_stage_origin(
         total
     };
 
-    let t_pitch = torque_for(TEST_DEFLECTION_RAD, 0.0);
-    let t_yaw = torque_for(0.0, TEST_DEFLECTION_RAD);
+    let t_zero = torque_for(0.0, 0.0);
+    let t_pitch_absolute = torque_for(TEST_DEFLECTION_RAD, 0.0);
+    let t_yaw_absolute = torque_for(0.0, TEST_DEFLECTION_RAD);
+    // The original full-stage inversion used the absolute torque at a test
+    // deflection. Preserve it exactly; only the selected-subset path uses the
+    // affine slope around the nonzero zero-deflection operating point.
+    let t_pitch = t_pitch_absolute - t_zero;
+    let t_yaw = t_yaw_absolute - t_zero;
 
-    let pitch_cmd = if t_pitch.x.abs() > 1e-6 {
-        (torque_cmd.x / t_pitch.x * TEST_DEFLECTION_RAD) as f32
+    // A symmetric full stage has no zero-deflection torque, and the original
+    // independent-axis inversion is exact enough. A selected subset (for
+    // example one ring engine on a landing burn) has a large static torque
+    // because the thrust line misses the center of mass; invert the affine map
+    // around that operating point instead of assuming it passes through zero.
+    if trim_static_torque && t_zero.length() > 1.0e-6 {
+        let (a, b) = (t_pitch.x, t_yaw.x);
+        let (c, d) = (t_pitch.z, t_yaw.z);
+        let determinant = a * d - b * c;
+        if determinant.abs() > 1.0e-9 {
+            let residual_x = torque_cmd.x - t_zero.x;
+            let residual_z = torque_cmd.z - t_zero.z;
+            let pitch_cmd = (residual_x * d - b * residual_z) / determinant * TEST_DEFLECTION_RAD;
+            let yaw_cmd = (a * residual_z - residual_x * c) / determinant * TEST_DEFLECTION_RAD;
+            return (pitch_cmd as f32, yaw_cmd as f32);
+        }
+        return (0.0, 0.0);
+    }
+
+    let pitch_cmd = if t_pitch_absolute.x.abs() > 1e-6 {
+        (torque_cmd.x / t_pitch_absolute.x * TEST_DEFLECTION_RAD) as f32
     } else {
         0.0
     };
-    let yaw_cmd = if t_yaw.z.abs() > 1e-6 {
-        (torque_cmd.z / t_yaw.z * TEST_DEFLECTION_RAD) as f32
+    let yaw_cmd = if t_yaw_absolute.z.abs() > 1e-6 {
+        (torque_cmd.z / t_yaw_absolute.z * TEST_DEFLECTION_RAD) as f32
     } else {
         0.0
     };
@@ -165,4 +196,92 @@ pub fn stage_gimbaled_thrust_body(
         mass_flow += point.mass_flow_kg_s;
     }
     (force, mass_flow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entities::rocket::ThrustReference;
+    use bevy::math::Vec3;
+
+    fn ring_engine() -> RocketEngine {
+        RocketEngine {
+            position_m: Vec3::new(0.2, -20.6, 0.0),
+            thrust_axis: Vec3::Y,
+            isp_sea_level: 282.0,
+            isp_vacuum: 311.0,
+            gimbal_range_deg: 5.0,
+            rated_thrust_kn: 845.222,
+            thrust_reference: ThrustReference::SeaLevel,
+            throttle_min: 0.0,
+            throttle_max: 1.0,
+            max_ignitions: 5,
+            ignition_count: 1,
+            state: EngineState::Running,
+        }
+    }
+
+    /// A selected off-axis engine has a static torque at zero deflection. The
+    /// allocator must trim it rather than assume the thrust line passes through
+    /// the center of mass.
+    #[test]
+    fn off_axis_engine_trims_its_static_torque() {
+        let engine = ring_engine();
+        let (pitch, yaw) = allocate_gimbal_deflections(
+            std::slice::from_ref(&engine),
+            DVec3::ZERO,
+            DVec3::ZERO,
+            1.0,
+            0.0,
+            true,
+        );
+        assert!(
+            pitch.abs() > 1.0e-6 || yaw.abs() > 1.0e-6,
+            "the allocator must find a nonzero trim, got {pitch}, {yaw}"
+        );
+        let produced = stage_gimbal_torque_body(
+            std::slice::from_ref(&engine),
+            DVec3::ZERO,
+            DVec3::ZERO,
+            1.0,
+            0.0,
+            f64::from(pitch),
+            f64::from(yaw),
+        );
+        assert!(
+            produced.length() < 10.0,
+            "trim must cancel the static torque, produced {produced:?}"
+        );
+    }
+
+    #[test]
+    fn off_axis_engine_tracks_a_commanded_pitch_torque() {
+        let engine = ring_engine();
+        let commanded = DVec3::new(1_000.0, 0.0, 0.0);
+        let (pitch, yaw) = allocate_gimbal_deflections(
+            std::slice::from_ref(&engine),
+            DVec3::ZERO,
+            commanded,
+            1.0,
+            0.0,
+            true,
+        );
+        let produced = stage_gimbal_torque_body(
+            std::slice::from_ref(&engine),
+            DVec3::ZERO,
+            DVec3::ZERO,
+            1.0,
+            0.0,
+            f64::from(pitch),
+            f64::from(yaw),
+        );
+        assert!(
+            (produced.x - commanded.x).abs() < 1.0,
+            "commanded pitch torque not produced: {produced:?}"
+        );
+        assert!(
+            produced.z.abs() < 10.0,
+            "pitch command leaked into yaw: {produced:?}"
+        );
+    }
 }

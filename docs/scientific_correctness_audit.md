@@ -265,7 +265,9 @@ offset-spin, and separating contact), the pad-target wiring adds one ECS test
 overwritten), and the grid-fin/entry work adds nine (six domain allocation
 tests, two ECS force/torque tests, one guidance handoff test) while replacing
 the three old normalized-mixer tests with one effectiveness test, a net gain of
-seven. The tree now measures 1,240 passed with `dem` and 1,188 without.
+seven. At the grid-fin commit the tree measured 1,240 passed with `dem` and
+1,188 without; the center-engine commit adds two affine-trim tests and raises the
+floor to 1,242 and 1,190.
 
 **Baselines.** `ascent-gravity-turn` was re-recorded through
 `scripts/regression/save_baseline.sh` because the gimbal/RCS split changes the
@@ -336,6 +338,14 @@ sea surface (residual 7). The 25 t variant now crashes at T+553.813 s with
 305.62 m/s descent and 549.01 km still to go, so additional propellant alone
 does not close the return: the profile needs an entry burn and a landing-burn
 allocation, or a downrange recovery zone.
+
+**2026-11-12 update.** The center-engine commit re-flies the committed profile:
+separation and insertion are unchanged, while the crash moves to T+597.062 s
+(325.82 m/s vertical, 245.98 m/s lateral, 34.26° tilt, 745.71 km short). The
+follow-up 25 t and downrange-deck experiments in the residuals section supersede
+the "energy and burn sequencing" conclusion above: the remaining blocker is
+terminal-attitude authority against the aerodynamic load, not propellant mass
+alone.
 
 **Recovery-burn experiment (2026-11-11, not committed).** Before changing the
 committed recovery profile, the next options were measured in isolated flights.
@@ -472,10 +482,27 @@ upper stage ignition budget is 3 so an insertion relight is at least nominally
 possible. The entry remains `Representative`: public figures, no pinned source
 byte.
 
+**Engine layout correction (2026-11-12).** The nine first-stage engines were all
+on the 1.2 m ring, so there was no center engine for a one-engine landing. The
+catalog and the fixture now carry one center Merlin plus eight ring engines in
+opposite pairs, and the first-stage ignition budget is five (ascent, boostback,
+entry, landing, margin). The layout is symmetric, so the all-engine ascent force
+and torque are unchanged; the catalog/fixture equivalence test pins it. The
+three deterministic baselines use the Electron-like fixture and the full-stage
+gimbal allocation is preserved bit-for-bit, so **no baseline was re-recorded**.
+A recovery stage now carries an `EngineSelection` component; the committed
+profile still selects all nine engines, so this is plumbing for a future
+one-engine landing, not a recovery-profile change.
+
 **Measured.** Headless Starbase ascent: 549,500 kg at liftoff, T/W 1.41, stage
 separation at T+144.2 s shedding 40,600 kg and leaving 112,898 kg of upper
-stage. The three committed flight baselines use the Electron-like fixture, not
-the catalog, so they are unchanged.
+stage. Insertion still closes at 201.1783 × 199.9759 km. The three committed
+flight baselines use the Electron-like fixture, not the catalog, so they are
+unchanged. The center-engine layout changes the recovery stage's gimbal
+allocation slightly; the committed recovery flight now crashes at T+597.062 s
+(325.82 m/s, 34.26° tilt, 745.71 km short) instead of T+594.828 s (342.66 m/s,
+31.13° tilt, 744.67 km short). That is a comparable controlled entry, not a
+landing.
 
 **Source identity (2026-11-11) — deliberately unpinned, with the reason
 recorded.** The entry stays `Representative` and claims no `sha256`. The cited
@@ -639,20 +666,33 @@ or GAP in the scope where it is untested or unflown.
    a simulation result. It must not be cited as visual verification of anything
    else.
 4. **RCS fidelity and recovery.** The representative station/tank model and the
-   booster-recovery case are the SC-04 residuals above. The recovery flight now
+   booster-recovery case are the SC-04 residuals above. The committed profile now
    enters engines-first under grid-fin control (body rate below 0.5 rad/s through
    the dynamic-pressure rise), but it does not land: boostback consumes the 15 t
-   reserve, the stage is still 744.67 km short, and the impact at T+594.828 s is
-   a crash at 342.66 m/s. A 25 t reserve improves the crash to 549.01 km short
-   and 305.62 m/s, but still does not land; 40 t breaks the ascent. A
-   2026-11-11 recovery-burn experiment (not committed) showed that reserving
-   landing propellant raises the entry speed until the stage tumbles, that a
-   nine-engine landing burn is uncontrollable, and that a single ring engine
-   cannot trim its 5°-gimbal thrust offset; the catalog had no center engine.
-   Entry-attitude authority, not just propellant mass, is the binding
-   constraint. The chute, repeated-crash-event, contact-impulse and tumble
-   defects found by these flights are fixed and tested. Recovery energy
-   sequencing remains IMPLEMENTED-tested, not VERIFIED hardware or flight.
+   reserve, the stage is still 745.71 km short, and the impact at T+597.062 s is a
+   crash at 325.82 m/s. A 25 t reserve improves the crash to 549.01 km short and
+   305.62 m/s, but still does not land; 40 t breaks the ascent. The
+   2026-11-11 burn experiment showed that reserving landing propellant raises the
+   entry speed until the stage tumbles and that a nine-engine landing burn is
+   uncontrollable. The 2026-11-12 follow-up, using the now-committed center engine
+   and `EngineSelection` plumbing, flew two variants:
+   - **25 t RTLS.** Insertion is preserved (200.526 × 199.353 km). The stage
+     reaches powered descent with about 4.2 t left, but crashes at T+1174.8 s with
+     195.85 m/s vertical, 222.57 m/s lateral and 39.05° tilt, 520.54 km short. The
+     single landing engine never ignites because the rate-limited flip cannot
+     align within the 15° gate against the airframe's aerodynamic torque.
+   - **Downrange deck.** No boostback; a three-engine entry burn from 60 to 25 km
+     consumes 25.4 → 5.07 t and slows 2537 → 1890 m/s, but the shallow entry then
+     lifts and skips to 55–81 km and crashes 158–622 km from the deck. The deck
+     target, body-fixed tracking and station keeping were implemented and flown,
+     but the stage does not arrive.
+
+   The binding constraint is terminal/entry attitude authority in the
+   reduced-order fin/aero model, not propellant mass or the engine layout. The
+   center-engine correction and subset plumbing are committed; the experimental
+   burn profiles are not. Recovery energy sequencing remains IMPLEMENTED-tested,
+   not VERIFIED hardware or flight.
+
 5. **Water impact.** A crash over water resolves against the sea-floor terrain
    height, not the sea surface. The measured recovery finishes on the Gulf sea
    floor at about −3.4 km terrain height. There is no water-impact, surface
@@ -661,17 +701,18 @@ or GAP in the scope where it is untested or unflown.
 
 ## Next steps, in order of physical impact
 
-1. **Recovery entry-attitude authority and energy.** The booster is
-   attitude-stable through the current 15 t boostback entry, but reserving
-   propellant for landing raises the entry speed and the stage tumbles (2,759
-   m/s entry → 38 rad/s versus 2,476 m/s → below 0.5 rad/s). A nine-engine
-   landing burn is uncontrollable, and a single ring engine cannot trim its
-   1.2 m offset within the 5° gimbal; the catalog also lacked a center engine.
-   The next step is therefore an entry-attitude/control redesign (center-engine
-   one-engine landing, entry-burn/attitude law, or a lower-energy downrange
-   recovery zone) together with the burn budget, not propellant reallocation
-   alone. A center-engine correction changes the ascent and requires a
-   deliberate baseline re-record.
+1. **Recovery terminal-attitude authority.** The booster is attitude-stable
+   through the current 15 t boostback entry, but reserving propellant for landing
+   raises the entry speed until the stage tumbles (2,759 m/s entry → 38 rad/s
+   versus 2,476 m/s → below 0.5 rad/s). A nine-engine landing burn is
+   uncontrollable; the center engine and one-engine subset now exist, but the
+   rate-limited flip cannot hold alignment against the airframe torque at the
+   landing handoff, and the shallow downrange entry lifts and skips. The next
+   step is a terminal/entry attitude-control redesign (flip law, actuator
+   authority, or a higher-fidelity fin/aero model) and, for the downrange path,
+   an entry-lift management law. The center-engine layout is now committed; the
+   three deterministic baselines are Electron-only and the full-stage gimbal
+   allocation is preserved, so no baseline was re-recorded.
 2. **Water impact.** Resolve a water contact at the sea surface and distinguish a
    survivable splashdown from a crash, instead of always using the sea-floor
    height. This affects any coastal or offshore landing.
@@ -691,9 +732,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on `6a7d4e0`, the grid-fin commit. It
-adds a net seven tests, so the floor rises to 1,240 with `dem` and 1,188 without;
-the previous floor was 1,233 and 1,181.
+The gate for this track is the project gate, run on the center-engine commit. It
+adds two net tests (the affine gimbal trim cases), so the floor rises to 1,242
+with `dem` and 1,190 without; the previous floor was 1,240 and 1,188.
 
 | check | result |
 | --- | --- |
@@ -701,12 +742,13 @@ the previous floor was 1,233 and 1,181.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,240 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,188 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,242 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,190 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site, RCS cluster and four grid fins; boostback → engines-first `EntryDescent`; body rate stays below 0.5 rad/s through the T+435–560 dynamic-pressure rise; one crash at T+594.828 s (342.66 m/s descent, 31.13° tilt, 1.645 rad/s, 744.67 km short); 0 kg propellant, `Crashed` at T+5,400 s |
-| reserve trade-off with grid fins | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
+| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; body rate stays below 0.5 rad/s through the T+435–560 dynamic-pressure rise; one crash at T+597.062 s (325.82 m/s vertical, 245.98 m/s lateral, 34.26° tilt, 1.103 rad/s, 745.71 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| reserve trade-off with grid fins (pre-center-engine) | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
+| 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes at T+1174.8 s (195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short); the landing engine never aligns within the 15° gate. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) skips to 55–81 km and crashes 158–622 km from the deck |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |

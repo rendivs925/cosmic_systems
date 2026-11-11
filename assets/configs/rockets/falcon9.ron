@@ -49,9 +49,11 @@
             height_m: 70.0,
             stages: [
                 (
-                    // Nine Merlin 1D engines on the octaweb ring (radius
-                    // 1.2 m at stage-local y = -20.6 m); per-engine thrust =
-                    // 7 607 kN / 9.
+                    // Nine Merlin 1D engines: one center engine plus eight
+                    // ring engines at radius 1.2 m, all at stage-local
+                    // y = -20.6 m; per-engine thrust = 7 607 kN / 9. The
+                    // center engine is first so a one-engine landing burn
+                    // selects it.
                     name: "Falcon 9 Stage 1",
                     basis: Representative,
                     diameter_m: 3.7,
@@ -84,95 +86,98 @@
                     engines: (
                         basis: Representative,
                         values: [
+                        // Center Merlin: gimbal deflection produces torque
+                        // through the axial offset, with no radial thrust offset.
                         (
-                            position: (1.2, -20.6, 0.0),
+                            position: (0.0, -20.6, 0.0),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            // Ascent plus boostback, entry and landing restarts.
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (0.9192533, -20.6, 0.7713451),
+                            position: (1.200000, -20.6, 0.000000),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (0.2083778, -20.6, 1.1817693),
+                            position: (-1.200000, -20.6, 0.000000),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (-0.6, -20.6, 1.0392305),
+                            position: (0.848528, -20.6, 0.848528),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (-1.1276311, -20.6, 0.4104242),
+                            position: (-0.848528, -20.6, -0.848528),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (-1.1276311, -20.6, -0.4104242),
+                            position: (0.000000, -20.6, 1.200000),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (-0.6, -20.6, -1.0392305),
+                            position: (-0.000000, -20.6, -1.200000),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (0.2083778, -20.6, -1.1817693),
+                            position: (-0.848528, -20.6, 0.848528),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         (
-                            position: (0.9192533, -20.6, -0.7713451),
+                            position: (0.848528, -20.6, -0.848528),
                             thrust_axis: (0.0, 1.0, 0.0),
                             isp_sl: 282.0,
                             isp_vac: 311.0,
                             gimbal_range_deg: 5.0,
                             rated_thrust_n: 845_222.2,
                             thrust_reference: SeaLevel,
-                            max_ignitions: 3,
+                            max_ignitions: 5,
                         ),
                         ],
                     ),

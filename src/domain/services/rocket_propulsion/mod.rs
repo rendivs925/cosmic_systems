@@ -49,7 +49,7 @@ mod mass;
 mod staging;
 
 pub use engine::{
-    burn_duration_s, clamp_throttle_range, consume_propellant, engine_thrust_n,
+    burn_duration_s, clamp_throttle_range, consume_propellant, engine_subset, engine_thrust_n,
     mass_flow_from_thrust, selected_isp, stage_available_thrust_body, stage_throttle_envelope,
     stage_thrust_body, thrust_from_isp, EngineOperatingPoint, PropellantConsumption,
 };
@@ -817,7 +817,7 @@ mod tests {
         let com = DVec3::new(0.0, -10.0, 0.0);
         let torque_cmd = DVec3::new(5.0e6, 0.0, -3.0e6);
 
-        let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0, 0.0);
+        let (pitch, yaw) = allocate_gimbal_deflections(engines, com, torque_cmd, 1.0, 0.0, false);
         // Positive X torque needs a negative pitch (engines below COM).
         assert!(pitch < 0.0);
         assert!(yaw > 0.0);
@@ -841,7 +841,7 @@ mod tests {
 
         // No engines → no deflections.
         assert_eq!(
-            allocate_gimbal_deflections(&[], com, torque_cmd, 1.0, 0.0),
+            allocate_gimbal_deflections(&[], com, torque_cmd, 1.0, 0.0, false),
             (0.0, 0.0)
         );
     }
