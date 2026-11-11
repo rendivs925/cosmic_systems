@@ -635,7 +635,7 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on `847df25`, the pad-target commit. It
+The gate for this track is the project gate, run on `2c61001`, the pad-target commit plus the test-import cleanup. It
 adds one ECS test, so the floor rises to 1,233 with `dem` and 1,181 without; the
 previous floor was 1,232 and 1,180.
 
