@@ -348,6 +348,49 @@ mod tests {
         }
     }
 
+    /// The Falcon 9 entry is permanently `Representative` until a dated,
+    /// immutable source artifact is archived. This guard records *why* no
+    /// checksum is claimed — the cited vendor page is mutable HTML, so a hash
+    /// would name a snapshot that the URL cannot reproduce later — and stops the
+    /// entry from silently gaining a `SourceVerified` claim or a fabricated
+    /// hash.
+    #[test]
+    fn falcon9_records_that_its_web_source_cannot_be_byte_pinned() {
+        let manifest = env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+        let text = fs::read_to_string(
+            Path::new(&manifest)
+                .join(CONFIGS_RELATIVE_PATH)
+                .join(FALCON9_RON),
+        )
+        .expect("falcon9.ron readable");
+        let vehicle = RocketConfigFile::ron_options()
+            .from_str::<RocketConfigFile>(&text)
+            .expect("falcon9.ron parses")
+            .vehicles
+            .into_iter()
+            .next()
+            .expect("falcon9.ron defines one vehicle");
+
+        assert!(matches!(vehicle.basis, DataBasis::Representative));
+        let source = vehicle
+            .provenance
+            .primary_source
+            .expect("falcon9 declares its primary source");
+        assert_eq!(
+            source.sha256, None,
+            "a mutable vendor page has no stable byte identity to pin"
+        );
+        let rationale = vehicle
+            .provenance
+            .representative_rationale
+            .as_deref()
+            .expect("Representative basis requires a rationale");
+        assert!(
+            rationale.contains("mutable") && rationale.contains("not byte-pinned"),
+            "the rationale must state why the source byte is not pinned: {rationale}"
+        );
+    }
+
     #[test]
     fn shipped_engine_stations_fit_their_stage_local_cylinders() {
         for file in ["falcon9.ron", "starship.ron", "electron.ron", "sls.ron"] {

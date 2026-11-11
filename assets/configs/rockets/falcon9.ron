@@ -22,8 +22,15 @@
 // loads, Merlin thrust/ISP, Merlin Vacuum thrust/ISP) as published in the
 // Falcon 9 Payload User's Guide era (2018-2021) and SpaceX vehicle pages.
 // Ignition budgets, the 15 t recovery reserve and the landing-leg mass limit
-// are conservative simulator assumptions, not asserted operational limits. The
-// dated source byte is not pinned, so no checksum is claimed.
+// are conservative simulator assumptions, not asserted operational limits.
+//
+// Source identity is deliberately not byte-pinned. The cited URL is SpaceX's
+// mutable vehicle page (HTML whose content changes without a versioned,
+// immutable edition), and this offline workspace holds no retrieved snapshot.
+// Hashing a live page would pin an artifact a later reader cannot retrieve, so
+// no SHA-256 is claimed and the entry stays Representative. Trajectory
+// reproducibility is pinned separately by the loaded configuration's SHA-256,
+// which every simulation run identity records.
 
 (
     vehicles: [
@@ -36,7 +43,7 @@
                     title: "Falcon 9 Payload User's Guide",
                     source_url: "https://www.spacex.com/vehicles/falcon-9/",
                 ),
-                representative_rationale: "Public Block 5 masses, propellant loads, and Merlin/Merlin Vacuum thrust and ISP; engine stations, ignition budgets, recovery reserve, and landing-gear limits are simulator-representative. The dated source byte is not pinned.",
+                representative_rationale: "Public Block 5 masses, propellant loads, and Merlin/Merlin Vacuum thrust and ISP; engine stations, ignition budgets, recovery reserve, and landing-gear limits are simulator-representative. The source byte is not byte-pinned: the cited page is mutable vendor HTML with no dated immutable edition and no retrieved snapshot, so no checksum is claimed.",
             ),
             diameter_m: 3.7,
             height_m: 70.0,
