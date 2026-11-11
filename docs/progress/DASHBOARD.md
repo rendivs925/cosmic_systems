@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-11.
-Last code checkpoint: `2c61001` (2026-11-11).
+Last code checkpoint: `6a7d4e0` (2026-11-11).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,16 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 2c61001 |
-| `cargo check --all-targets --features dem` | PASS | 2c61001 |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 2c61001 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 2c61001 |
-| `cargo test --features dem --lib` | 1240 passed, 0 failed, 2 ignored | 2c61001 |
-| `cargo test --no-default-features --lib` | 1188 passed, 0 failed, 2 ignored | 2c61001 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 2c61001 |
-| `cargo build --release --features dem` | PASS | 2c61001 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 2c61001 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage inherits the pad target, RCS cluster and four grid fins: engines-first entry below 0.5 rad/s, one crash at T+594.828 s (342.66 m/s, 31.13° tilt, 744.67 km short) | 2c61001 |
+| `cargo fmt --check` | PASS | 6a7d4e0 |
+| `cargo check --all-targets --features dem` | PASS | 6a7d4e0 |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 6a7d4e0 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 6a7d4e0 |
+| `cargo test --features dem --lib` | 1240 passed, 0 failed, 2 ignored | 6a7d4e0 |
+| `cargo test --no-default-features --lib` | 1188 passed, 0 failed, 2 ignored | 6a7d4e0 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 6a7d4e0 |
+| `cargo build --release --features dem` | PASS | 6a7d4e0 |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 6a7d4e0 |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage inherits the pad target, RCS cluster and four grid fins: engines-first entry below 0.5 rad/s, one crash at T+594.828 s (342.66 m/s, 31.13° tilt, 744.67 km short) | 6a7d4e0 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

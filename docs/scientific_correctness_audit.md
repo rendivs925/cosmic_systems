@@ -650,7 +650,7 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on this grid-fin commit. It
+The gate for this track is the project gate, run on `6a7d4e0`, the grid-fin commit. It
 adds a net seven tests, so the floor rises to 1,240 with `dem` and 1,188 without;
 the previous floor was 1,233 and 1,181.
 
