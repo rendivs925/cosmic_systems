@@ -63,12 +63,12 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 6a7d4e0 |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 6a7d4e0 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 6a7d4e0 |
-| `cargo test --features dem --lib` | 1242 passed, 0 failed, 2 ignored | center-engine |
-| `cargo test --no-default-features --lib` | 1190 passed, 0 failed, 2 ignored | center-engine |
+| `cargo test --features dem --lib` | 1242 passed, 0 failed, 2 ignored | aa29b70 |
+| `cargo test --no-default-features --lib` | 1190 passed, 0 failed, 2 ignored | aa29b70 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 6a7d4e0 |
 | `cargo build --release --features dem` | PASS | 6a7d4e0 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 6a7d4e0 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage inherits the pad target, RCS cluster, four grid fins and an all-nine engine selection: engines-first entry below 0.5 rad/s, one crash at T+597.062 s (325.82 m/s, 34.26° tilt, 745.71 km short) | center-engine |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage inherits the pad target, RCS cluster, four grid fins and an all-nine engine selection: engines-first entry below 0.5 rad/s, one crash at T+597.062 s (325.82 m/s, 34.26° tilt, 745.71 km short) | aa29b70 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
