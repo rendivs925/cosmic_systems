@@ -337,12 +337,45 @@ sea surface (residual 7). The 25 t variant now crashes at T+553.813 s with
 does not close the return: the profile needs an entry burn and a landing-burn
 allocation, or a downrange recovery zone.
 
+**Recovery-burn experiment (2026-11-11, not committed).** Before changing the
+committed recovery profile, the next options were measured in isolated flights.
+None produced a landing, and two exposed hardware/control preconditions:
+
+- A landing burn that lights all nine engines is uncontrollable. The stage burned
+  9.2 t while its speed *rose* from 597 to 774 m/s; the thrust direction
+  oscillated with a velocity dot product between −0.99 and +0.99 and the stage
+  crashed at 1,236 m/s. The terminal controller cannot hold a nine-engine stage
+  through a hover-slam.
+- A single ring engine cannot trim its own thrust offset. At the 1.2 m ring
+  radius, the static torque is about 1.0 MN·m and needs roughly 14° of gimbal to
+  cancel; the Merlin installation is limited to 5°. An affine gimbal allocator
+  (correctly inverting the nonzero zero-deflection torque) was written and
+  tested, but the hardware itself cannot do it. The catalog also had no center
+  engine; correcting it to one center plus eight ring engines is a prerequisite
+  for a one-engine landing, not a solution by itself.
+- Reallocating propellant from boostback to a landing reserve raises the entry
+  speed. With a 10 t boostback (2,759 m/s entry) the stage tumbled at 38 rad/s
+  despite the grid fins; the committed full 15 t boostback enters at 2,476 m/s
+  and stays below 0.5 rad/s. The attitude margin between those two cases is the
+  binding constraint.
+- A three-engine entry burn from 70 km to 35 km consumed the entry reserve but
+  did not stabilise the higher-speed entry. A pre-landing 180° flip with a rate
+  limit and a 15° ignition interlock still left the stage tumbling and the
+  landing engine unlit.
+
+The lesson is that recovery energy cannot be fixed by propellant allocation
+alone: the higher entry speed that a landing reserve implies exceeds the current
+entry-attitude authority. The committed 15 t profile, with its stable entry and
+crashing but controlled impact, is retained until an entry-attitude/control
+redesign (or a lower-energy downrange recovery zone) is implemented and flown.
+The experiment is not a committed code path.
+
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
 exercised by the 5,400 s headless flight. The grid-fin entry is flown and removes
 the former tumble, but a landing is not verified. The seven residuals above bound
-the claim; recovery energy sequencing and station/tank fidelity remain outside
-it.
+the claim; recovery energy sequencing, entry-attitude authority, and station/tank
+fidelity remain outside it.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -611,10 +644,15 @@ or GAP in the scope where it is untested or unflown.
    the dynamic-pressure rise), but it does not land: boostback consumes the 15 t
    reserve, the stage is still 744.67 km short, and the impact at T+594.828 s is
    a crash at 342.66 m/s. A 25 t reserve improves the crash to 549.01 km short
-   and 305.62 m/s, but still does not land; 40 t breaks the ascent. The chute,
-   repeated-crash-event, contact-impulse and tumble defects found by these
-   flights are fixed and tested. Recovery energy sequencing remains
-   IMPLEMENTED-tested, not VERIFIED hardware or flight.
+   and 305.62 m/s, but still does not land; 40 t breaks the ascent. A
+   2026-11-11 recovery-burn experiment (not committed) showed that reserving
+   landing propellant raises the entry speed until the stage tumbles, that a
+   nine-engine landing burn is uncontrollable, and that a single ring engine
+   cannot trim its 5°-gimbal thrust offset; the catalog had no center engine.
+   Entry-attitude authority, not just propellant mass, is the binding
+   constraint. The chute, repeated-crash-event, contact-impulse and tumble
+   defects found by these flights are fixed and tested. Recovery energy
+   sequencing remains IMPLEMENTED-tested, not VERIFIED hardware or flight.
 5. **Water impact.** A crash over water resolves against the sea-floor terrain
    height, not the sea surface. The measured recovery finishes on the Gulf sea
    floor at about −3.4 km terrain height. There is no water-impact, surface
@@ -623,14 +661,17 @@ or GAP in the scope where it is untested or unflown.
 
 ## Next steps, in order of physical impact
 
-1. **Recovery energy and burn sequencing.** The booster is now attitude-stable
-   through entry, but the 15 t reserve is spent on boostback and the stage lands
-   744.67 km downrange at 342.66 m/s. The next step is a real recovery burn
-   sequence — boostback allocation, an entry burn, and a landing burn — sized
-   from a source-backed reserve, or a downrange drone-ship profile that fits the
-   available propellant. Extra reserve alone does not land (25 t still crashes
-   549 km short); changing the committed 15 t or the ascent requires a deliberate
-   baseline re-record.
+1. **Recovery entry-attitude authority and energy.** The booster is
+   attitude-stable through the current 15 t boostback entry, but reserving
+   propellant for landing raises the entry speed and the stage tumbles (2,759
+   m/s entry → 38 rad/s versus 2,476 m/s → below 0.5 rad/s). A nine-engine
+   landing burn is uncontrollable, and a single ring engine cannot trim its
+   1.2 m offset within the 5° gimbal; the catalog also lacked a center engine.
+   The next step is therefore an entry-attitude/control redesign (center-engine
+   one-engine landing, entry-burn/attitude law, or a lower-energy downrange
+   recovery zone) together with the burn budget, not propellant reallocation
+   alone. A center-engine correction changes the ascent and requires a
+   deliberate baseline re-record.
 2. **Water impact.** Resolve a water contact at the sea surface and distinguish a
    survivable splashdown from a crash, instead of always using the sea-floor
    height. This affects any coastal or offshore landing.
