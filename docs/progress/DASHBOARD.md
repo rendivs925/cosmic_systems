@@ -63,12 +63,12 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | feb8bfe |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | feb8bfe |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | feb8bfe |
-| `cargo test --features dem --lib` | 1227 passed, 0 failed, 2 ignored | feb8bfe |
-| `cargo test --no-default-features --lib` | 1175 passed, 0 failed, 2 ignored | feb8bfe |
+| `cargo test --features dem --lib` | 1229 passed, 0 failed, 2 ignored | HEAD |
+| `cargo test --no-default-features --lib` | 1177 passed, 0 failed, 2 ignored | HEAD |
 | `openspec validate --all --strict` | 43 passed, 0 failed | feb8bfe |
 | `cargo build --release --features dem` | PASS | feb8bfe |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | feb8bfe |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant | feb8bfe |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage: no chutes, one crash at T+599.016 s (152.17 m/s, 19.25° tilt), 0 kg propellant | HEAD |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

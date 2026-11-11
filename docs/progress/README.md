@@ -44,10 +44,16 @@ so it stays `Representative` and run identity pins the loaded configuration hash
 instead. And the two lateral aerodynamic slopes are now equal at 1.5 per radian,
 which makes the axisymmetric airframe roll-invariant; all three baselines pass
 unchanged. The headless Falcon 9 flight now closes at 201.1783 x 199.9759 km with
-42.483 kg of RCS propellant used. What that does *not* claim is recorded in the
-audit: the cluster is representative, a failed-thruster flight and the booster
-recovery at the new allocation were not flown, and the insertion law still trims
-apsides only.
+42.483 kg of RCS propellant used. The booster recovery was then flown on the same
+flight and exposed two real defects: a landing-gear vehicle deployed parachutes
+because the chute model is per-body, and a wreck re-published a crash every fixed
+tick. Both are fixed and tested. The return itself still does not land — the
+representative 15 t reserve is consumed by boostback, the scenario leaves the pad
+target unset, and the crash exposes a spinning-contact energy pump — so recovery
+remains IMPLEMENTED-tested, not flight-verified. What that does *not* claim is
+recorded in the audit: the cluster is representative, a failed-thruster flight was
+not flown, recovery is not verified, and the insertion law still trims apsides
+only.
 
 TD-02 is verified: every captured pad is flush and dry. Getting there needed
 three things. A capture-only `COSMIC_SYSTEMS_CAPTURE_UTC` pins the start instant,

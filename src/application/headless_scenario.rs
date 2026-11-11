@@ -22,7 +22,8 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    RocketMissionState, RocketRcs, SpentStage,
+    LandingScorecard, ParachuteState, RecoveringStage, RocketMissionState, RocketPhysicsState,
+    RocketPropulsion, RocketRcs, SpentStage, TerrainCollisionState,
 };
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
@@ -309,6 +310,97 @@ pub fn run_headless_scenario_artifact(
             target: "rcs_summary",
             propellant_used_kg = rcs_used_kg,
             "RCS propellant summary"
+        );
+    }
+    // The artifact telemetry records the primary vehicle only. The booster
+    // recovery entity flies an independent mission state machine, so its final
+    // disposition has to be reported separately or it is invisible in a
+    // headless run.
+    let recovery_summaries = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(
+            &RocketPhysicsState,
+            &RocketPropulsion,
+            &RocketMissionState,
+            &TerrainCollisionState,
+            &LandingScorecard,
+            &ParachuteState,
+        ), With<RecoveringStage>>();
+        query
+            .iter(world)
+            .map(
+                |(state, propulsion, mission, collision, scorecard, parachute)| {
+                    let radius_m = state.dynamics.position_m.length();
+                    (
+                        state.dynamics.position_m,
+                        state.dynamics.mass_kg,
+                        propulsion
+                            .propellant_remaining_kg
+                            .first()
+                            .copied()
+                            .unwrap_or(0.0),
+                        mission.code(),
+                        collision.radar_altitude_m,
+                        collision.ground_contact,
+                        scorecard.recorded,
+                        scorecard.touchdown_vertical_speed_mps,
+                        scorecard.touchdown_lateral_speed_mps,
+                        scorecard.touchdown_tilt_deg,
+                        scorecard.distance_to_target_m,
+                        parachute.drogue_deployed || parachute.main_deployed,
+                        state.dynamics.velocity_mps.length(),
+                        if radius_m > 1.0 {
+                            state
+                                .dynamics
+                                .velocity_mps
+                                .dot(state.dynamics.position_m / radius_m)
+                        } else {
+                            0.0
+                        },
+                        state.dynamics.angular_velocity_radps.length(),
+                    )
+                },
+            )
+            .collect::<Vec<_>>()
+    };
+    for (
+        position_m,
+        mass_kg,
+        propellant_remaining_kg,
+        mission_state_code,
+        radar_altitude_m,
+        ground_contact,
+        scorecard_recorded,
+        touchdown_vertical_speed_mps,
+        touchdown_lateral_speed_mps,
+        touchdown_tilt_deg,
+        distance_to_target_m,
+        parachute_deployed,
+        speed_mps,
+        radial_speed_mps,
+        angular_speed_radps,
+    ) in recovery_summaries
+    {
+        bevy::log::info!(
+            target: "recovery_summary",
+            position_x_m = position_m.x,
+            position_y_m = position_m.y,
+            position_z_m = position_m.z,
+            mass_kg = mass_kg,
+            propellant_remaining_kg = propellant_remaining_kg,
+            mission_state_code = mission_state_code,
+            radar_altitude_m = radar_altitude_m,
+            ground_contact = ?ground_contact,
+            scorecard_recorded = scorecard_recorded,
+            touchdown_vertical_speed_mps = touchdown_vertical_speed_mps,
+            touchdown_lateral_speed_mps = touchdown_lateral_speed_mps,
+            touchdown_tilt_deg = touchdown_tilt_deg,
+            distance_to_target_m = distance_to_target_m,
+            parachute_deployed = parachute_deployed,
+            speed_mps = speed_mps,
+            radial_speed_mps = radial_speed_mps,
+            angular_speed_radps = angular_speed_radps,
+            "Recovery stage summary"
         );
     }
     artifact.validate()?;

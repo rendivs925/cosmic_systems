@@ -924,6 +924,54 @@ mod ground_contact_tests {
         );
     }
 
+    /// A wreck that keeps penetrating the sampled surface must publish its
+    /// terminal crash once, not once per fixed tick.
+    #[test]
+    fn a_crashed_wreck_emits_exactly_one_crash_event() {
+        #[derive(Resource, Default)]
+        struct CrashCount(usize);
+        fn count_crashes(mut reader: MessageReader<CrashEvent>, mut count: ResMut<CrashCount>) {
+            count.0 += reader.read().count();
+        }
+
+        let mut app = pad_app(0.0, 20.0);
+        app.init_resource::<CrashCount>();
+        app.add_systems(Update, count_crashes);
+        let entity = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<RocketPhysicsState>>();
+            query.single(world).unwrap()
+        };
+        let mut legs = LandingLegs::new(LandingGear::new(
+            LandingGearSpec {
+                count: 4,
+                base_radius_m: 4.5,
+                stroke_m: 3.0,
+                max_landing_mass_kg: Some(500.0),
+                deploy_altitude_m: 100.0,
+            },
+            1_000.0,
+        ));
+        legs.deployment.deployed = true;
+        let world = app.world_mut();
+        world.entity_mut(entity).insert(legs);
+        *world.get_mut::<RocketMissionState>(entity).unwrap() = RocketMissionState::Landing;
+        world.get_mut::<GroundRest>(entity).unwrap().active = false;
+
+        for _ in 0..12 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().get::<RocketMissionState>(entity).unwrap(),
+            RocketMissionState::Crashed
+        );
+        assert_eq!(
+            app.world().resource::<CrashCount>().0,
+            1,
+            "a wreck must publish one terminal crash, not one per fixed tick"
+        );
+    }
+
     /// Relaunch (Phase 14): one command restores a flown, drained vehicle to
     /// a fresh pad state and clears its jettisoned debris.
     #[test]

@@ -483,8 +483,22 @@ pub fn resolve_ground_contact(
                 }
             }
             GroundContact::Crash => {
-                if *mission_state != RocketMissionState::PreLaunch {
+                // A wreck stays in contact for many ticks while it settles and
+                // tumbles. The terminal verdict is a one-shot event: emitting it
+                // and overwriting the scorecard every tick produced hundreds of
+                // physically meaningless "crashes" from a single impact.
+                if *mission_state != RocketMissionState::PreLaunch
+                    && *mission_state != RocketMissionState::Crashed
+                {
                     *mission_state = RocketMissionState::Crashed;
+                    bevy::log::info!(
+                        "Crash at ({lat:.2}, {lon:.2}): contact descent {:.2} m/s, lateral {:.2} m/s, tilt {:.1} deg, com speed {:.2} m/s, angular {:.3} rad/s",
+                        -components.normal_mps,
+                        components.lateral_mps,
+                        tilt_deg,
+                        rocket.dynamics.velocity_mps.length(),
+                        rocket.dynamics.angular_velocity_radps.length()
+                    );
                     crash_writer.write(CrashEvent {
                         rocket: rocket_entity,
                         position_m: contact_position_m,

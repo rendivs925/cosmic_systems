@@ -1,7 +1,7 @@
 use super::components::{
-    AblationState, CommsState, ForceAccumulator, GroundRest, ParachuteState, RetroPropulsionEffect,
-    RocketFlightConditions, RocketGeometry, RocketMissionState, RocketPhysicsState,
-    RocketPropulsion, TerrainCollisionState, ThermalState,
+    AblationState, CommsState, ForceAccumulator, GroundRest, LandingLegs, ParachuteState,
+    RetroPropulsionEffect, RocketFlightConditions, RocketGeometry, RocketMissionState,
+    RocketPhysicsState, RocketPropulsion, TerrainCollisionState, ThermalState,
 };
 use super::events::CommsBlackoutEvent;
 use crate::domain::services::entry_physics::{
@@ -158,6 +158,10 @@ pub fn compute_plasma_blackout(
 /// this system only adapts it: feed flight condition, apply the resulting
 /// canopy drag to the translational accumulator. Deployment requires a
 /// descending airstream, so an ascent cannot trigger the chutes.
+#[expect(
+    clippy::type_complexity,
+    reason = "The query groups the state this single force writer reads, including the landing-gear marker that disables chutes."
+)]
 pub fn compute_parachute_forces(
     sim_time: Res<SimulationTime>,
     config: Res<EntryPhysicsConfig>,
@@ -167,6 +171,7 @@ pub fn compute_parachute_forces(
         &TerrainCollisionState,
         &GroundRest,
         &RocketMissionState,
+        Option<&LandingLegs>,
         &mut ParachuteState,
         &mut ForceAccumulator,
     )>,
@@ -179,10 +184,21 @@ pub fn compute_parachute_forces(
         collision,
         ground_rest,
         mission_state,
+        landing_legs,
         mut parachute,
         mut force_accum,
     ) in rocket_query.iter_mut()
     {
+        // Deployable landing gear is the marker for a propulsively recovered
+        // vehicle. A booster that lands on its own engine is not fitted with a
+        // drogue/main parachute: the canopy state machine would otherwise
+        // deploy on every descending Earth vehicle because the parachute model
+        // is per-body, not per-vehicle. The configured recovery path owns the
+        // descent; this system must not add a second recovery mechanism.
+        if landing_legs.is_some() {
+            continue;
+        }
+
         // Parachutes only deploy during descent/landing phases, not on the pad.
         if *mission_state == RocketMissionState::PreLaunch
             || *mission_state == RocketMissionState::Launch
@@ -291,6 +307,7 @@ mod tests {
     use crate::domain::math::{DMat3, DQuat, DVec3};
     use crate::domain::services::atmosphere::FlightConditions;
     use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use crate::domain::services::simulation_time::SimulationTime;
     use crate::infrastructure::bevy_adapters::rocket::components::BoosterAttachmentState;
     use bevy::prelude::{App, Update};
 
@@ -391,5 +408,100 @@ mod tests {
         let velocity = DVec3::new(0.0, -200.0, 0.0);
         let (mut app, entity) = supersonic_app(velocity);
         assert_eq!(multiplier(&mut app, entity), 1.0);
+    }
+
+    /// A descending vehicle fitted with deployable landing gear is recovering
+    /// propulsively and must not also deploy parachutes. The same vehicle
+    /// without gear still uses the per-body chute model.
+    #[test]
+    fn parachutes_skip_landing_gear_vehicles() {
+        use crate::domain::services::landing_gear::{LandingGear, LandingGearSpec};
+
+        fn descending_vehicle(app: &mut App, with_gear: bool) -> Entity {
+            let velocity_mps = DVec3::new(0.0, -120.0, 0.0);
+            let conditions = FlightConditions {
+                altitude_m: 4_000.0,
+                temperature_k: 262.0,
+                ambient_pressure_pa: 61_660.0,
+                density_kg_m3: 0.8194,
+                speed_of_sound_mps: 324.0,
+                atmosphere_relative_velocity_mps: velocity_mps,
+                airspeed_mps: velocity_mps.length(),
+                mach_number: velocity_mps.length() / 324.0,
+                dynamic_pressure_pa: 0.5 * 0.8194 * velocity_mps.length_squared(),
+            };
+            let entity = app
+                .world_mut()
+                .spawn((
+                    RocketPhysicsState {
+                        dynamics: RocketDynamicsState::new(
+                            DVec3::new(0.0, 6.371e6 + 4_000.0, 0.0),
+                            velocity_mps,
+                            DQuat::IDENTITY,
+                            25_600.0,
+                            DMat3::IDENTITY,
+                            DVec3::ZERO,
+                        ),
+                    },
+                    RocketFlightConditions::from_sample(conditions),
+                    TerrainCollisionState::default(),
+                    GroundRest::default(),
+                    RocketMissionState::UnpoweredDescent,
+                    ParachuteState::default(),
+                    ForceAccumulator::default(),
+                ))
+                .id();
+            if with_gear {
+                app.world_mut()
+                    .entity_mut(entity)
+                    .insert(LandingLegs::new(LandingGear::new(
+                        LandingGearSpec {
+                            count: 4,
+                            base_radius_m: 5.0,
+                            stroke_m: 0.8,
+                            max_landing_mass_kg: Some(30_000.0),
+                            deploy_altitude_m: 2_000.0,
+                        },
+                        25_600.0,
+                    )));
+            }
+            entity
+        }
+
+        let mut app = App::new();
+        app.insert_resource(EntryPhysicsConfig::default());
+        app.insert_resource(SimulationTime::new(1.0 / 64.0));
+        app.add_systems(Update, compute_parachute_forces);
+
+        let geared = descending_vehicle(&mut app, true);
+        let ungreared = descending_vehicle(&mut app, false);
+        app.update();
+
+        let geared_parachute = app.world().get::<ParachuteState>(geared).unwrap();
+        assert!(
+            !geared_parachute.deployment.drogue_deployed,
+            "a propulsively recovered vehicle must not deploy a drogue"
+        );
+        let geared_force = app
+            .world()
+            .get::<ForceAccumulator>(geared)
+            .unwrap()
+            .force_n();
+        assert_eq!(geared_force, DVec3::ZERO);
+
+        let ungeared_parachute = app.world().get::<ParachuteState>(ungreared).unwrap();
+        assert!(
+            ungeared_parachute.deployment.drogue_deployed,
+            "a gearless descending vehicle still uses the chute model"
+        );
+        let ungeared_force = app
+            .world()
+            .get::<ForceAccumulator>(ungreared)
+            .unwrap()
+            .force_n();
+        assert!(
+            ungeared_force.length() > 0.0,
+            "the deployed drogue must add drag"
+        );
     }
 }

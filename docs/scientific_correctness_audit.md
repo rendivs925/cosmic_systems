@@ -18,7 +18,7 @@ least one test, not runtime-verified flight.
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery flight not re-flown** |
+| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery flight flown but still unverified** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight; plane error measured at 0.0014°** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
@@ -256,8 +256,9 @@ that was rounded away.
 failure, minimum impulse, and tank-limited scaling. Two ECS tests run the real
 `actuation_system`: a commanded X torque appears in `TorqueAccumulator` and
 decreases the final-stage tank, and a failed +X thruster leaves no +X authority.
-SC-04 adds those eight tests; with the two later SC-03/SC-06 guards the tree
-measures 1,227 passed with `dem` and 1,175 without.
+SC-04 adds those eight tests; the recovery hardening adds two more (a
+landing-gear vehicle must not deploy chutes, and a crashed wreck must publish one
+terminal event). The tree now measures 1,229 passed with `dem` and 1,177 without.
 
 **Baselines.** `ascent-gravity-turn` was re-recorded through
 `scripts/regression/save_baseline.sh` because the gimbal/RCS split changes the
@@ -276,13 +277,39 @@ vacuum insertion state) are unchanged. The baseline README records the reason.
    simplification of a separate RCS propellant system.
 3. Thruster failure is representable in the model and tested, but no flight
    scenario exercises a failed thruster.
-4. A complete booster-recovery flight was **not** re-flown at the new authority.
-   The landing/recovery tests exercise the envelope, but recovery remains
-   IMPLEMENTED-tested, not flight-verified at this allocation.
+4. The recovery flight is now flown (2026-11-11), but it does not verify a
+   landing. The representative 15 t reserve is consumed by boostback before any
+   landing burn can run, and the headless scenario does not set a pad target.
+   Recovery remains IMPLEMENTED-tested, not flight-verified at this allocation.
+5. The contact authority applies the contact-point velocity correction to the
+   center of mass without a matching angular impulse. A spinning wreck therefore
+   pumps translational energy into the body: the recovery impact measured a
+   507.6 m/s center-of-mass speed with a 185.25 rad/s spin, which the scorecard
+   reports as a 3,772.7 m/s contact-point lateral speed, and the wreck was then
+   launched onto a 739 km arc. A proper linear-plus-angular contact impulse is the
+   correct fix; it is a physics change with its own tests and baseline review and
+   is not attempted here.
+6. The recovery autopilot's landing target defaults to the sub-vehicle surface
+   point when unset, not the launch pad. The measured recovery therefore had no
+   explicit RTLS target; a scenario that wants pad return must set one.
+
+**Recovery flight measured after the 2026-11-11 fixes.** The same 5,400 s
+Starbase flight spawns the recovery entity at T+144.219 s. Boostback burns the
+entire 15,000 kg representative reserve by T+180 s (40.6 t to 25.6 t) and reaches
+a 175.4 km apex near T+290 s. Before the fixes the stage deployed a drogue at
+4.37 km and a main at 2.74 km and still hit at 41 m/s, and the contact authority
+re-published a crash every tick (952 events). After the fixes a vehicle carrying
+landing gear skips parachute deployment entirely, and the wreck publishes one
+terminal crash: T+599.016 s, 152.17 m/s descent, 19.25° tilt. With no propellant
+left for a landing burn this is a crash, not a recovery. The measured
+center-of-mass speed at impact is 507.64 m/s with a 185.25 rad/s spin; the
+scorecard's 3,772.7 m/s lateral is the contact-point `ω × r` term. The wreck
+finishes the run on a suborbital arc at 739 km altitude with 421.44 m/s and is
+still `Crashed`.
 
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
-exercised by the 5,400 s headless flight. The four residuals above bound the
+exercised by the 5,400 s headless flight. The six residuals above bound the
 claim; recovery and station/tank fidelity remain outside it.
 
 ## SC-05 — Closed-loop orbit insertion
@@ -547,19 +574,38 @@ or GAP in the scope where it is untested or unflown.
    a simulation result. It must not be cited as visual verification of anything
    else.
 4. **RCS fidelity and recovery.** The representative station/tank model and the
-   unflown booster-recovery case are the SC-04 residuals above. They remain
-   implemented/tested scope, not VERIFIED hardware or flight.
+   booster-recovery case are the SC-04 residuals above. The recovery flight is
+   now flown, but it does not land: boostback consumes the representative 15 t
+   reserve, no landing burn remains, and the impact is a crash. The chute and
+   repeated-crash-event defects found by that flight are fixed and tested.
+   Recovery remains IMPLEMENTED-tested, not VERIFIED hardware or flight.
+5. **Spinning-wreck contact.** The contact authority corrects the center-of-mass
+   velocity from a contact-point velocity without an angular impulse. The
+   recovery flight measured 185.25 rad/s of wreck spin, a 3,772.7 m/s
+   contact-point lateral speed against a 507.6 m/s center-of-mass speed, and a
+   subsequent 739 km arc. A linear-plus-angular contact impulse is the correct
+   model; until then a crash verdict is not a settled-wreck model.
 
 ## Next steps, in order of physical impact
 
-1. **RCS station/tank fidelity and a recovery flight.** Replace the representative
-   single-arm cluster and final-stage tank draw with a catalogued layout, then fly
-   the booster recovery at the new authority. Until then SC-04's recovery scope
-   is IMPLEMENTED-tested, not flight-verified.
-2. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
+1. **Contact impulse for spinning bodies.** The recovery flight measured 185 rad/s
+   of wreck spin converting into a 3.77 km/s contact-point correction and a 739 km
+   arc. Implement a linear-plus-angular contact impulse so a tumbling contact
+   exchanges momentum with the body instead of pumping translational energy. This
+   is now the top physical-impact item because it affects any high-spin impact,
+   not only recovery.
+2. **Recovery fidelity.** Give the recovery autopilot an explicit pad target in
+   the scenario (it currently defaults to the sub-vehicle point), and either source
+   or explicitly raise the representative 15 t reserve so boostback leaves a
+   landing burn. Then fly the return. Until both are done, SC-04's recovery scope
+   stays IMPLEMENTED-tested, not flight-verified.
+3. **RCS station/tank fidelity.** Replace the representative single-arm cluster
+   and final-stage tank draw with a catalogued layout. The current model remains a
+   documented simplification.
+4. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
    archived snapshot with a checksum; the current mutable vendor page cannot be
    pinned honestly.
-3. **Insertion deadband (optional, low impact).** The plane error is measured at
+5. **Insertion deadband (optional, low impact).** The plane error is measured at
    0.00135°, so a plane-change burn is not justified by this flight. The visible
    insertion offset is the altitude deadband (+1.18 km apoapsis). Tightening it
    is a control change with a baseline review; treat it as polish, not physics.
@@ -568,10 +614,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on `feb8bfe`, which adds only
-the inclination fields to the autopilot mode-edge log; the functional state is
-the three commits ending at `70bfef5`. Counts are unchanged by the log fields.
-The previous floor was 1,217 with `dem` and 1,165 without.
+The gate for this track is the project gate, run on the recovery-hardening
+commit (pinned in the dashboard). It adds two regression tests, so the floor rises
+to 1,229 with `dem` and 1,177 without; the previous floor was 1,227 and 1,175.
 
 | check | result |
 | --- | --- |
@@ -579,10 +624,11 @@ The previous floor was 1,217 with `dem` and 1,165 without.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,227 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,175 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,229 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,177 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
+| recovery stage in the same flight | no parachute deployment; one crash at T+599.016 s (152.17 m/s descent, 19.25° tilt, 507.64 m/s COM speed, 185.25 rad/s spin); 0 kg propellant; still `Crashed` at T+5,400 s |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |
