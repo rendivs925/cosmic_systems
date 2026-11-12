@@ -12,6 +12,11 @@ use bevy::gltf::Gltf;
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 
+/// Ambient saucer-loop gain. The source is normalized and the loop sits under
+/// the flight UI for the whole session, so keep it well below the rocket engine
+/// mix (which peaks near 0.7). Tune here rather than at the spawn site.
+const CRAFT_ELECTRONIC_LOOP_VOLUME: f32 = 0.12;
+
 pub fn spawn_craft(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -194,7 +199,7 @@ pub fn spawn_craft_model(
             AudioPlayer::new(asset_server.load("sounds/craft_electronic.ogg")),
             PlaybackSettings {
                 mode: PlaybackMode::Loop,
-                volume: Volume::Linear(0.28),
+                volume: Volume::Linear(CRAFT_ELECTRONIC_LOOP_VOLUME),
                 ..default()
             },
             Transform::from_translation(load.spawn_position),
