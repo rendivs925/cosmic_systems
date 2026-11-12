@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-12.
-Last code checkpoint: `f555aa1` (2026-11-12).
+Last code checkpoint: `c5c3db0` (2026-11-12).
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,16 +59,16 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | f555aa1 |
-| `cargo check --all-targets --features dem` | PASS | f555aa1 |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | f555aa1 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | f555aa1 |
-| `cargo test --features dem --lib` | 1252 passed, 0 failed, 2 ignored | f555aa1 |
-| `cargo test --no-default-features --lib` | 1200 passed, 0 failed, 2 ignored | f555aa1 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | f555aa1 |
-| `cargo build --release --features dem` | PASS | f555aa1 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | f555aa1 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.15 m/s, one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short) | f555aa1 |
+| `cargo fmt --check` | PASS | c5c3db0 |
+| `cargo check --all-targets --features dem` | PASS | c5c3db0 |
+| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | c5c3db0 |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | c5c3db0 |
+| `cargo test --features dem --lib` | 1252 passed, 0 failed, 2 ignored | c5c3db0 |
+| `cargo test --no-default-features --lib` | 1200 passed, 0 failed, 2 ignored | c5c3db0 |
+| `openspec validate --all --strict` | 43 passed, 0 failed | c5c3db0 |
+| `cargo build --release --features dem` | PASS | c5c3db0 |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | c5c3db0 |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.15 m/s, one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short) | c5c3db0 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
