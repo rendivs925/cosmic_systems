@@ -240,6 +240,14 @@ pub fn propulsion_staging(
             recovery_autopilot.mode = AutopilotMode::Boostback;
             recovery_autopilot.integral = DVec3::ZERO;
             recovery_autopilot.time_since_liftoff_s = 0.0;
+            // The recovery stage's landing target must come from the recovery
+            // mission input: the launch pad is re-derived every tick from the
+            // launch site, and a moving deck owns it when present. Carrying
+            // the ascent autopilot's snapshot forward is only correct for a
+            // return-to-launch flight; a downrange stage has no pad, so a stale
+            // ascent target would steer terminal guidance at a site hundreds of
+            // kilometres away.
+            recovery_autopilot.target_landing_position_m = DVec3::ZERO;
             let recovery_vehicle = Rocket {
                 name: format!("{} recovery", recovery_stage.name),
                 diameter_m: separated_stage.diameter_m,

@@ -447,6 +447,32 @@ stage is unchanged. Two tests pin the recoverable shutdown/restart and the
 expendable depletion. The committed 15 t profile is unchanged because its
 engines were already `Off` at separation; the 25 t profile can now ignite.
 
+**Downrange entry-burn measurement and target-authority fix (2026-11-12,
+experiment not committed).** With the lifecycle fix in place, a post-fold
+downrange profile was re-flown: a 25 t reserve, no boostback (recovery starts
+in `EntryDescent`), and a three-engine entry burn gated on the descending leg
+(70 km to 38 km). The burn lights, consumes 20.0 t in 22 s, and removes about
+640 m/s (2,525 to 1,881 m/s) while the SC-01 base-pressure correlation applies
+its 0.50 thrust floor at Mach 7–8. The stage still crosses 6.7 km at 1.18 km/s
+and 612 kPa, and the 4 t terminal reserve cannot remove the remaining vertical
+speed: the measured impact is 596.83 m/s vertical, 357.01 m/s lateral, 22.74°
+tilt. Leaving a larger terminal reserve does not close the budget either: a
+shorter entry burn arrives faster through the same 6 km of atmosphere. A
+landing needs an entry-lift/flight-path law or the missing large-angle
+crossflow/base drag (SC-03 residual), not a different propellant split.
+
+The experiment also exposed a target-authority defect. The recovery autopilot
+is cloned from the ascent autopilot, so it inherited the pad target even when
+no launch site was attached. In the downrange flight that target stayed about
+935 km away and terminal guidance spent its reserve steering toward it. The
+recovery stage now clears `target_landing_position_m` at separation and takes
+its target from the authoritative recovery input: the launch site re-derived
+each tick for a return-to-launch flight, or a moving deck. The separation test
+inserts a non-zero ascent target and asserts the recovering stage starts at
+zero. The committed 15 t return-to-launch flight is unchanged because guidance
+re-derives the same pad position on the first tick; the re-flight reproduces
+the T+501.078 s crash.
+
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
 exercised by the 5,400 s headless flight. The retrograde aero fold is

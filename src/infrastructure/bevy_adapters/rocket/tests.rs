@@ -2440,6 +2440,20 @@ mod ascent_pipeline_tests {
                 .unwrap();
             propulsion.vehicle.stages[0].recovery_propellant_reserve_kg = Some(100.0);
         }
+        // The ascent autopilot always carries the pad target into separation.
+        // The recovery stage must re-derive its own target, so a downrange
+        // stage cannot inherit a return-to-launch site.
+        let rocket = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<RocketPropulsion>>()
+                .single(world)
+                .unwrap()
+        };
+        app.world_mut().entity_mut(rocket).insert(RocketAutopilot {
+            target_landing_position_m: DVec3::new(1.0, 2.0, 3.0),
+            ..Default::default()
+        });
 
         for _ in 0..20_000 {
             app.world_mut().run_schedule(FixedUpdate);
@@ -2453,6 +2467,11 @@ mod ascent_pipeline_tests {
             if let Ok((propulsion, mission, autopilot, _collision)) = recovering.single(world) {
                 assert_eq!(*mission, RocketMissionState::Landing);
                 assert_eq!(autopilot.mode, AutopilotMode::Boostback);
+                assert_eq!(
+                    autopilot.target_landing_position_m,
+                    DVec3::ZERO,
+                    "recovery must not inherit the ascent pad target"
+                );
                 assert_eq!(propulsion.propellant_remaining_kg, vec![100.0]);
                 assert!(propulsion.vehicle.stages[0]
                     .recovery_propellant_reserve_kg
