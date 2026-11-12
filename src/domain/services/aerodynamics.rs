@@ -29,7 +29,11 @@
 //! - Z flow angle: `β_z = asin(v_z / |v|)` in the body frame.
 //! - Coefficients (analytic approximations, documented limits): constant base
 //!   drag `Cd = 0.3`, and the same linear normal-force slope in both lateral
-//!   planes, `Cn_x = 1.5·α_x` and `Cn_z = −1.5·β_z`. The airframe is
+//!   planes, `Cn_x = 1.5·α_x` and `Cn_z = −1.5·β_z`. `α_x` is folded to the
+//!   nearest body end for the normal-force law: an axisymmetric airframe flown
+//!   engines-first sees the same lateral physics as the equivalent small angle
+//!   measured from the windward end, so a 180° axial flow must not produce a
+//!   `π·slope` lateral force. The airframe is
 //!   axisymmetric with no modelled fins, so the two lateral planes are
 //!   physically equivalent; equal slopes make the force and torque model
 //!   invariant under roll about the longitudinal axis. The previous `−0.8`
@@ -91,6 +95,23 @@ pub fn angle_of_sideslip(body_velocity: DVec3) -> f64 {
 /// carried by each plane's coefficient definition below.
 pub const LATERAL_NORMAL_FORCE_SLOPE_PER_RAD: f64 = 1.5;
 
+/// Fold an X-plane flow angle to the windward body end, radians.
+///
+/// [`angle_of_attack`] reports the signed angle from the longitudinal +Y axis,
+/// so an engines-first flow is near ±π. The normal-force law is only calibrated
+/// for a small angle measured from the end facing the flow; feeding it ±π
+/// would command a `π × slope` lateral force at perfectly axial flow. Folding
+/// preserves the small-angle response bit-for-bit and is continuous at ±90°.
+pub fn folded_normal_flow_angle(alpha_rad: f64) -> f64 {
+    if alpha_rad > std::f64::consts::FRAC_PI_2 {
+        std::f64::consts::PI - alpha_rad
+    } else if alpha_rad < -std::f64::consts::FRAC_PI_2 {
+        -std::f64::consts::PI - alpha_rad
+    } else {
+        alpha_rad
+    }
+}
+
 /// Analytic aerodynamic coefficients for the two lateral body axes:
 /// `(cd, cn_x, cn_z)` from the X-plane and Z-plane flow angles. `cn_x` scales
 /// the normal force along +X; `cn_z` scales the side force along `lift_dir × v̂`
@@ -98,7 +119,7 @@ pub const LATERAL_NORMAL_FORCE_SLOPE_PER_RAD: f64 = 1.5;
 /// Both lateral slopes have the same magnitude by axisymmetry.
 pub fn aerodynamic_coefficients(alpha_rad: f64, beta_rad: f64) -> (f64, f64, f64) {
     let cd = 0.3;
-    let cn_x = LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * alpha_rad;
+    let cn_x = LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * folded_normal_flow_angle(alpha_rad);
     let cn_z = -LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * beta_rad;
     (cd, cn_x, cn_z)
 }
@@ -157,7 +178,10 @@ pub fn lift_force_body(
 }
 
 /// Z-axis side force in the body frame: perpendicular to both velocity and the
-/// X normal direction, magnitude `q·Cn_z·A`.
+/// X normal direction, magnitude `q·Cn_z·A`. The cross product uses the axial
+/// direction oriented toward the nose, not the raw velocity: for an
+/// engines-first flow the raw `lift_dir × v̂` reverses and would reinforce the
+/// sideslip instead of restoring it.
 pub fn side_force_body(
     dynamic_pressure_pa: f64,
     normal_z_coefficient: f64,
@@ -169,7 +193,12 @@ pub fn side_force_body(
     };
     let speed = body_velocity.length();
     let vel_unit = body_velocity / speed;
-    let side_dir = lift_dir.cross(vel_unit);
+    let axial_unit = if body_velocity.y < 0.0 {
+        -vel_unit
+    } else {
+        vel_unit
+    };
+    let side_dir = lift_dir.cross(axial_unit);
     side_dir * (dynamic_pressure_pa * normal_z_coefficient * reference_area_m2)
 }
 
@@ -251,6 +280,66 @@ mod tests {
                 "Z side force must do no work"
             );
         }
+    }
+
+    /// A booster descends engines-first, so the body-frame velocity is near
+    /// −Y and [`angle_of_attack`] is near ±π. The normal-force law is
+    /// calibrated from the windward end; without folding, a perfectly axial
+    /// retrograde flow would command `π × slope` of lateral force.
+    #[test]
+    fn retrograde_axial_flow_produces_no_lateral_force() {
+        let q = dynamic_pressure_q(1.225, 200.0);
+        let vel = DVec3::new(0.0, -200.0, 0.0);
+        let alpha = angle_of_attack(vel);
+        assert!((alpha.abs() - std::f64::consts::PI).abs() < 1e-9);
+        let folded = folded_normal_flow_angle(alpha);
+        assert!(folded.abs() < 1e-12, "retrograde axial flow must fold to 0");
+        let (_, cn_x, cn_z) = aerodynamic_coefficients(alpha, angle_of_sideslip(vel));
+        assert!(cn_x.abs() < 1e-12);
+        assert!(cn_z.abs() < 1e-12);
+        assert_eq!(lift_force_body(q, cn_x, AREA, vel), DVec3::ZERO);
+        assert_eq!(side_force_body(q, cn_z, AREA, vel), DVec3::ZERO);
+    }
+
+    /// Lateral forces must restore the transverse flow in both directions.
+    /// Retrograde flow previously reversed the side-force basis.
+    #[test]
+    fn retrograde_lateral_flow_is_restored_in_both_planes() {
+        let q = dynamic_pressure_q(1.225, 200.0);
+        for lateral in [-10.0, 10.0] {
+            let x_plane_velocity = DVec3::new(lateral, -200.0, 0.0);
+            let (_, cn_x, _) = aerodynamic_coefficients(angle_of_attack(x_plane_velocity), 0.0);
+            let x_force = lift_force_body(q, cn_x, AREA, x_plane_velocity);
+            assert!(
+                x_force.x * lateral < 0.0,
+                "retrograde X normal force must oppose X-plane flow: {x_force:?}"
+            );
+            assert!(x_force.dot(x_plane_velocity).abs() < 1e-6);
+
+            let z_plane_velocity = DVec3::new(0.0, -200.0, lateral);
+            let (_, _, cn_z) = aerodynamic_coefficients(0.0, angle_of_sideslip(z_plane_velocity));
+            let z_force = side_force_body(q, cn_z, AREA, z_plane_velocity);
+            assert!(
+                z_force.z * lateral < 0.0,
+                "retrograde Z side force must oppose Z-plane flow: {z_force:?}"
+            );
+            assert!(z_force.dot(z_plane_velocity).abs() < 1e-6);
+        }
+    }
+
+    /// Folding must leave the prograde small-angle response untouched.
+    #[test]
+    fn folding_preserves_the_prograde_small_angle_slope() {
+        for alpha in [-0.4, -0.1, 0.0, 0.1, 0.4] {
+            assert_eq!(folded_normal_flow_angle(alpha), alpha);
+        }
+        // The mirrored retrograde angle folds to the same magnitude; the
+        // physical direction is carried by the lift basis, not the coefficient.
+        let prograde = folded_normal_flow_angle(0.1);
+        let retrograde = folded_normal_flow_angle(std::f64::consts::PI - 0.1);
+        assert!((prograde - retrograde).abs() < 1e-12);
+        let retrograde_negative = folded_normal_flow_angle(-std::f64::consts::PI + 0.1);
+        assert!((retrograde_negative + 0.1).abs() < 1e-12);
     }
 
     const AREA: f64 = std::f64::consts::PI * 1.85 * 1.85; // ~10.75 m²

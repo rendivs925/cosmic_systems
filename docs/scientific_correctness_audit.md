@@ -17,7 +17,7 @@ least one test, not runtime-verified flight.
 | --- | --- | --- |
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
-| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; CP comment corrected** |
+| SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; retrograde 180° normal-force fold; CP comment corrected** |
 | SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery attitude grid-fin controlled, landing still unverified (energy)** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight; plane error measured at 0.0014°** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
@@ -175,6 +175,38 @@ swap.
 **Not changed.** The center-of-pressure position itself is unchanged: moving it
 would change the aerodynamic torque and the three committed baselines.
 
+**Defect 3 — the small-angle normal-force law was applied at 180° (fixed
+2026-11-12).** `angle_of_attack` reports the signed angle from body `+Y`, so an
+engines-first booster — the recovery stage's `EntryDescent` attitude — has
+`α ≈ ±π`. The coefficient `Cn_x = 1.5·α_x` then commanded a lateral force about
+`π` times the small-angle value on a perfectly axial flow, along the arbitrary
+body `+X` direction. The Z side force used `lift_dir × v̂`, whose sign also
+reverses for retrograde flow. In other words, the recovery entry was not the
+zero-lift body the guidance assumed.
+
+The fix folds the X-plane angle to the windward body end
+(`folded_normal_flow_angle`): it is identical for `|α| ≤ 90°` and continuous at
+±90°, so prograde flight is bit-for-bit unchanged, while a 180° axial flow maps
+to zero. `side_force_body` now uses the nose-ward axial unit for its cross
+product, so retrograde sideslip is restored instead of augmented. New domain
+tests pin zero lateral force at retrograde axial flow, restoring force in both
+lateral planes, and the unchanged prograde slope. The three committed baselines
+pass unchanged because the gravity-turn ascent never enters the folded branch.
+
+Measured on the committed 5,400 s Starbase profile: the recovery stage now holds
+`α ≈ 179.7°` (0.3° from axial) with body rate `≈ 0` through the dynamic-pressure
+rise that peaks at 870 kPa, and publishes one crash at T+501.078 s (652.94 m/s
+vertical, 379.59 m/s lateral, 26.82° tilt, 710.88 km short, 0 kg propellant).
+The previously recorded T+597.062 s crash (325.82 m/s, 745.71 km short) was
+cushioned by the spurious `π·slope` lateral force; the corrected model is
+steeper and faster. The remaining recovery failure is propellant/entry energy,
+not a tumble.
+
+**Residual — large-angle crossflow.** The fold fixes the 180° axial case, but
+the underlying linear law and the `lift_direction` basis are calibrated for
+small angles; near 90° they remain an analytic approximation, not tabulated
+crossflow data.
+
 ## SC-04 — Per-thruster RCS allocation
 
 **Gap as found.** Actuation clamped a commanded body torque to a scalar
@@ -325,31 +357,42 @@ launch site and a representative RCS cluster, and inserts four grid fins. The
 15,000 kg representative reserve is consumed by boostback by T+180 s (40.6 t to
 25.6 t) and the stage reaches a 171.7 km ballistic apex. Boostback hands off to
 the new engines-first `EntryDescent` mode when the reserve is exhausted; through
-the dynamic-pressure rise (T+435 to T+560, the window that previously reached
-208.68 rad/s) the measured body rate stays below 0.5 rad/s and the fin
-allocation keeps the air-relative angle of attack small. The wreck publishes one
-terminal crash at T+594.828 s: 342.66 m/s descent, 219.01 m/s lateral, 31.13°
-tilt, 684.36 m/s center-of-mass speed, 1.645 rad/s angular rate, 744.67 km short
-of the pad. Before the fins the same flight crashed at T+510.234 s with
-1,040.52 m/s descent and 208.68 rad/s. At T+5,400 s it is `Crashed` with 0 kg
-propellant, ~0 m radar altitude and 414.87 m/s, which is the Earth-rotation
-surface speed at the crash latitude; the position is the Gulf sea floor, not the
-sea surface (residual 7). The 25 t variant now crashes at T+553.813 s with
-305.62 m/s descent and 549.01 km still to go, so additional propellant alone
-does not close the return: the profile needs an entry burn and a landing-burn
-allocation, or a downrange recovery zone.
+the dynamic-pressure rise (T+435 to T+500) the measured body rate stays below
+0.5 rad/s and the airframe holds the retrograde axial attitude (α ≈ 179.7°,
+0.3° from axial, after the 2026-11-12 fold fix). The wreck publishes one
+terminal crash at T+501.078 s: 652.94 m/s descent, 379.59 m/s lateral, 26.82°
+tilt, 0.897 rad/s angular rate, 710.88 km short of the pad. Before the fins the
+same flight crashed at T+510.234 s with 1,040.52 m/s descent and 208.68 rad/s.
+At T+5,400 s it is `Crashed` with 0 kg propellant, ~0 m radar altitude and
+409.78 m/s, which is the Earth-rotation surface speed at the crash latitude; the
+position is the Gulf sea floor, not the sea surface (residual 7). Before the
+aero fold, the 25 t variant crashed at T+553.813 s with 305.62 m/s descent and
+549.01 km still to go, so additional propellant alone does not close the return:
+the profile needs an entry burn and a landing-burn allocation, or a downrange
+recovery zone. The 2026-11-12 aero fold removes the spurious lateral force; the
+impact is steeper and faster than the pre-fold 325.82 m/s measurement, and the
+stage still has no propellant for a terminal burn.
 
 **2026-11-12 update.** The center-engine commit re-flies the committed profile:
 separation and insertion are unchanged, while the crash moves to T+597.062 s
 (325.82 m/s vertical, 245.98 m/s lateral, 34.26° tilt, 745.71 km short). The
-follow-up 25 t and downrange-deck experiments in the residuals section supersede
-the "energy and burn sequencing" conclusion above: the remaining blocker is
-terminal-attitude authority against the aerodynamic load, not propellant mass
-alone.
+subsequent aero fold fix (SC-03 defect 3) removes the spurious retrograde
+lateral force and re-flies the same profile to a T+501.078 s crash (652.94 m/s
+vertical, 379.59 m/s lateral, 710.88 km short) with the stage holding
+engines-first at `α ≈ 179.7°` and body rate `≈ 0` through the dynamic-pressure
+rise. The pre-fold 25 t and downrange-deck experiments below are therefore
+superseded as evidence about *attitude authority*: their tumbles and skips
+included the `π·slope` artifact. They still fail after the fold, but the
+remaining blocker is entry energy and trajectory shaping, not a fin/torque
+authority shortfall.
 
 **Recovery-burn experiment (2026-11-11, not committed).** Before changing the
 committed recovery profile, the next options were measured in isolated flights.
-None produced a landing, and two exposed hardware/control preconditions:
+None produced a landing, and two exposed hardware/control preconditions. These
+flights predate the SC-03 retrograde-fold fix, so their attitude/tumble numbers
+are not clean evidence about actuator authority; the hardware findings (no
+center engine, single-engine gimbal offset) stand, while the entry-attitude
+conclusions must be re-flown before they are re-used:
 
 - A landing burn that lights all nine engines is uncontrollable. The stage burned
   9.2 t while its speed *rose* from 597 to 774 m/s; the thrust direction
@@ -373,19 +416,24 @@ None produced a landing, and two exposed hardware/control preconditions:
   limit and a 15° ignition interlock still left the stage tumbling and the
   landing engine unlit.
 
-The lesson is that recovery energy cannot be fixed by propellant allocation
-alone: the higher entry speed that a landing reserve implies exceeds the current
-entry-attitude authority. The committed 15 t profile, with its stable entry and
-crashing but controlled impact, is retained until an entry-attitude/control
-redesign (or a lower-energy downrange recovery zone) is implemented and flown.
-The experiment is not a committed code path.
+The pre-fold lesson was that recovery energy could not be fixed by propellant
+allocation alone because the higher entry speed exceeded the entry-attitude
+authority. The 2026-11-12 fold fix changes half of that: the booster can now
+hold retrograde axial flight at 2,300+ m/s with almost no body rate, so the
+attitude authority is no longer the first-order limit. What remains is an energy
+and trajectory-shaping problem: the stage still reaches the dense atmosphere at
+2,200-2,400 m/s on a −30° to −40° flight path and peaks near 870 kPa dynamic
+pressure, leaving either no propellant or no altitude for the terminal burn.
+The committed 15 t profile is retained until an entry-burn/lift-management law is
+implemented and flown. The experiment is not a committed code path.
 
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
-exercised by the 5,400 s headless flight. The grid-fin entry is flown and removes
-the former tumble, but a landing is not verified. The seven residuals above bound
-the claim; recovery energy sequencing, entry-attitude authority, and station/tank
-fidelity remain outside it.
+exercised by the 5,400 s headless flight. The retrograde aero fold is
+domain-tested and re-flown: the booster now enters engines-first at `α ≈ 179.7°`
+with body rate `≈ 0` through the high-dynamic-pressure rise, but a landing is
+not verified. The residuals above bound the claim; recovery energy sequencing,
+entry trajectory shaping, and station/tank fidelity remain outside it.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -502,7 +550,9 @@ unchanged. The center-engine layout changes the recovery stage's gimbal
 allocation slightly; the committed recovery flight now crashes at T+597.062 s
 (325.82 m/s, 34.26° tilt, 745.71 km short) instead of T+594.828 s (342.66 m/s,
 31.13° tilt, 744.67 km short). That is a comparable controlled entry, not a
-landing.
+landing. The later 2026-11-12 retrograde aero fold (SC-03 defect 3) re-flies the
+same profile to a T+501.078 s crash (652.94 m/s, 26.82° tilt, 710.88 km short);
+insertion and separation remain unchanged.
 
 **Source identity (2026-11-11) — deliberately unpinned, with the reason
 recorded.** The entry stays `Representative` and claims no `sha256`. The cited
@@ -667,31 +717,29 @@ or GAP in the scope where it is untested or unflown.
    else.
 4. **RCS fidelity and recovery.** The representative station/tank model and the
    booster-recovery case are the SC-04 residuals above. The committed profile now
-   enters engines-first under grid-fin control (body rate below 0.5 rad/s through
-   the dynamic-pressure rise), but it does not land: boostback consumes the 15 t
-   reserve, the stage is still 745.71 km short, and the impact at T+597.062 s is a
-   crash at 325.82 m/s. A 25 t reserve improves the crash to 549.01 km short and
-   305.62 m/s, but still does not land; 40 t breaks the ascent. The
-   2026-11-11 burn experiment showed that reserving landing propellant raises the
-   entry speed until the stage tumbles and that a nine-engine landing burn is
-   uncontrollable. The 2026-11-12 follow-up, using the now-committed center engine
-   and `EngineSelection` plumbing, flew two variants:
+   enters engines-first under grid-fin control (α ≈ 179.7°, body rate below
+   0.5 rad/s through the dynamic-pressure rise), but it does not land: boostback
+   consumes the 15 t reserve, the stage is still 710.88 km short, and the impact
+   at T+501.078 s is a crash at 652.94 m/s. A 25 t reserve improves the crash to
+   549.01 km short and 305.62 m/s, but still does not land; 40 t breaks the
+   ascent. The 2026-11-12 follow-up, using the center engine and
+   `EngineSelection` plumbing, flew two variants before the aero fold:
    - **25 t RTLS.** Insertion is preserved (200.526 × 199.353 km). The stage
-     reaches powered descent with about 4.2 t left, but crashes at T+1174.8 s with
-     195.85 m/s vertical, 222.57 m/s lateral and 39.05° tilt, 520.54 km short. The
-     single landing engine never ignites because the rate-limited flip cannot
-     align within the 15° gate against the airframe's aerodynamic torque.
+     reaches powered descent with about 4.2 t left, but crashes with 195.85 m/s
+     vertical, 222.57 m/s lateral and 39.05° tilt, 520.54 km short.
    - **Downrange deck.** No boostback; a three-engine entry burn from 60 to 25 km
-     consumes 25.4 → 5.07 t and slows 2537 → 1890 m/s, but the shallow entry then
-     lifts and skips to 55–81 km and crashes 158–622 km from the deck. The deck
-     target, body-fixed tracking and station keeping were implemented and flown,
-     but the stage does not arrive.
+     consumes 25.4 → 5.07 t and slows 2537 → 1890 m/s, then the stage crashes
+     158–622 km from the deck.
 
-   The binding constraint is terminal/entry attitude authority in the
-   reduced-order fin/aero model, not propellant mass or the engine layout. The
-   center-engine correction and subset plumbing are committed; the experimental
-   burn profiles are not. Recovery energy sequencing remains IMPLEMENTED-tested,
-   not VERIFIED hardware or flight.
+   Re-flown after the fold, the downrange entry holds retrograde (α ≈ 180°,
+   body rate ≈ 0) but still reaches 2.2 km/s at 15 km and peaks near 900 kPa
+   dynamic pressure; the three-engine entry burn is efficient once aligned but
+   the 25 t budget cannot both slow the stage and leave a terminal reserve. The
+   binding constraint is entry energy and flight-path shaping, not propellant
+   mass, engine layout, or fin authority. The center-engine correction, subset
+   plumbing, and aero fold are committed; the experimental burn profiles are
+   not. Recovery energy sequencing remains IMPLEMENTED-tested, not VERIFIED
+   hardware or flight.
 
 5. **Water impact.** A crash over water resolves against the sea-floor terrain
    height, not the sea surface. The measured recovery finishes on the Gulf sea
@@ -701,18 +749,17 @@ or GAP in the scope where it is untested or unflown.
 
 ## Next steps, in order of physical impact
 
-1. **Recovery terminal-attitude authority.** The booster is attitude-stable
-   through the current 15 t boostback entry, but reserving propellant for landing
-   raises the entry speed until the stage tumbles (2,759 m/s entry → 38 rad/s
-   versus 2,476 m/s → below 0.5 rad/s). A nine-engine landing burn is
-   uncontrollable; the center engine and one-engine subset now exist, but the
-   rate-limited flip cannot hold alignment against the airframe torque at the
-   landing handoff, and the shallow downrange entry lifts and skips. The next
-   step is a terminal/entry attitude-control redesign (flip law, actuator
-   authority, or a higher-fidelity fin/aero model) and, for the downrange path,
-   an entry-lift management law. The center-engine layout is now committed; the
-   three deterministic baselines are Electron-only and the full-stage gimbal
-   allocation is preserved, so no baseline was re-recorded.
+1. **Recovery entry-energy and flight-path shaping.** The 2026-11-12 aero fold
+   removed the spurious retrograde lateral force, and the booster now holds
+   engines-first (`α ≈ 179.7°`, body rate `≈ 0`) through the dynamic-pressure
+   rise. It still does not land: with 25 t it reaches the dense atmosphere at
+   2.2 km/s on a −30° to −40° path and peaks near 900 kPa, so the three-engine
+   entry burn either stops at the landing reserve or leaves no terminal altitude.
+   The next step is an entry-lift/flight-path law (bank/AoA modulation) plus a
+   deliberate entry-burn/landing split, and a downrange recovery zone sized to
+   the actual ballistic range. The center-engine layout and aero fold are
+   committed; the three deterministic baselines are Electron-only and the
+   prograde aero path is preserved bit-for-bit, so no baseline was re-recorded.
 2. **Water impact.** Resolve a water contact at the sea surface and distinguish a
    survivable splashdown from a crash, instead of always using the sea-floor
    height. This affects any coastal or offshore landing.
@@ -732,9 +779,10 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the center-engine commit. It
-adds two net tests (the affine gimbal trim cases), so the floor rises to 1,242
-with `dem` and 1,190 without; the previous floor was 1,240 and 1,188.
+The gate for this track is the project gate, run on the retrograde-aero-fold
+commit. It adds three domain tests (retrograde axial force, retrograde restoring
+force in both planes, and the unchanged prograde slope), so the floor rises to
+1,245 with `dem` and 1,193 without; the previous floor was 1,242 and 1,190.
 
 | check | result |
 | --- | --- |
@@ -742,13 +790,13 @@ with `dem` and 1,190 without; the previous floor was 1,240 and 1,188.
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,242 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,190 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,245 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,193 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; body rate stays below 0.5 rad/s through the T+435–560 dynamic-pressure rise; one crash at T+597.062 s (325.82 m/s vertical, 245.98 m/s lateral, 34.26° tilt, 1.103 rad/s, 745.71 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (652.94 m/s vertical, 379.59 m/s lateral, 26.82° tilt, 0.897 rad/s, 710.88 km short); 0 kg propellant, `Crashed` at T+5,400 s |
 | reserve trade-off with grid fins (pre-center-engine) | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
-| 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes at T+1174.8 s (195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short); the landing engine never aligns within the 15° gate. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) skips to 55–81 km and crashes 158–622 km from the deck |
+| 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes with 195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) crashes 158–622 km from the deck; re-flown after the fold it holds retrograde but still reaches 2.2 km/s at 15 km and peaks near 900 kPa |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |
