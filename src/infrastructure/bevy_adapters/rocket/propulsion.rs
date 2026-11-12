@@ -2,10 +2,11 @@
 
 use super::components::*;
 use super::events::StageSeparatedEvent;
+use super::recovery::RecoveryDeckEntity;
 use super::separation::{spawn_spent_stage, SpentStageSpec};
 use crate::application::rocket_spawning::{build_rocket_mesh, build_serial_stage_mesh};
 use crate::domain::entities::rocket::{EngineState, Rocket};
-use crate::domain::services::guidance::AutopilotMode;
+use crate::domain::services::guidance::{AutopilotMode, EntryBurnPlan, EntryBurnSequence};
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::rcs::REPRESENTATIVE_RCS_ISP_S;
 use crate::domain::services::rocket_propulsion::{
@@ -35,6 +36,7 @@ pub fn propulsion_staging(
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     sim_time: Res<SimulationTime>,
+    recovery_deck: Option<Res<RecoveryDeckEntity>>,
     mut separated_writer: MessageWriter<StageSeparatedEvent>,
     mut rocket_query: Query<(
         Entity,
@@ -237,7 +239,16 @@ pub fn propulsion_staging(
             let mut recovery_stage = propulsion.vehicle.stages[propulsion.active_stage - 1].clone();
             recovery_stage.recovery_propellant_reserve_kg = None;
             let mut recovery_autopilot = autopilot.cloned().unwrap_or_default();
-            recovery_autopilot.mode = AutopilotMode::Boostback;
+            // A deck recovery is a downrange mission: the stage has no
+            // boostback energy to fly home, so it separates directly into the
+            // engines-first entry law and lights an entry burn below. Without a
+            // deck the existing return-to-launch profile is unchanged.
+            let recovery_deck_entity = recovery_deck.as_ref().and_then(|deck| deck.0);
+            recovery_autopilot.mode = if recovery_deck_entity.is_some() {
+                AutopilotMode::EntryDescent
+            } else {
+                AutopilotMode::Boostback
+            };
             recovery_autopilot.integral = DVec3::ZERO;
             recovery_autopilot.time_since_liftoff_s = 0.0;
             // The recovery stage's landing target must come from the recovery
@@ -322,6 +333,23 @@ pub fn propulsion_staging(
             commands
                 .entity(spent_entity)
                 .insert(RocketRcs::representative(rcs_authority_nm, rcs_isp_s));
+            if let Some(deck) = recovery_deck_entity {
+                // The deck owns the landing target from separation onward. A
+                // zero prediction horizon makes guidance read the deck's live
+                // body-fixed position every tick instead of extrapolating a
+                // rotating platform in a straight line.
+                commands.entity(spent_entity).insert((
+                    DroneShipLandingTarget {
+                        drone_ship: deck,
+                        prediction_horizon_s: 0.0,
+                        deck_contact: false,
+                    },
+                    EntryBurnState {
+                        sequence: EntryBurnSequence::default(),
+                        plan: EntryBurnPlan::FALCON9_DOWNRANGE,
+                    },
+                ));
+            }
         }
         propulsion.time_since_separation_s = 0.0;
 

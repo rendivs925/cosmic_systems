@@ -4,4 +4,5 @@ pub mod dataset_manifest;
 pub mod imagery_manifest;
 pub mod launch_site_coordinates;
 pub mod planet_configs;
+pub mod recovery_deck;
 pub mod solar_system_params;

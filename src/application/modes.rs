@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter, Result as FormatterResult};
 
 use crate::domain::services::gravity::ForceModelTier;
 use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
+use crate::domain::value_objects::recovery_deck::RecoveryDeckCoordinates;
 
 /// Application run modes selectable from the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,13 +15,17 @@ pub enum Mode {
 
 /// Everything parsed from the command line: the run mode plus mode-specific
 /// options.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LaunchOptions {
     pub mode: Mode,
     /// `--vehicle <key>` selection; only meaningful in rocket mode.
     pub vehicle: Option<String>,
     /// `--site <id>` selection; only meaningful in rocket mode.
     pub site: Option<PredefinedLaunchSite>,
+    /// `--recovery-deck <lat>,<lon>` sea-surface recovery deck, terrain-radial
+    /// degrees; only meaningful in rocket mode. Supplying one selects the
+    /// downrange recovery profile.
+    pub recovery_deck: Option<RecoveryDeckCoordinates>,
     /// `--force-model <tier>` selection; only meaningful in rocket mode.
     pub force_model: Option<ForceModelTier>,
 }
@@ -31,8 +36,10 @@ pub struct LaunchOptions {
 pub enum LaunchOptionError {
     MissingVehicleValue,
     MissingSiteValue,
+    MissingRecoveryDeckValue,
     MissingForceModelValue,
     UnknownSite(String),
+    InvalidRecoveryDeck(String),
     UnknownForceModel(String),
     UnknownArgument(String),
 }
@@ -42,10 +49,17 @@ impl Display for LaunchOptionError {
         match self {
             Self::MissingVehicleValue => formatter.write_str("--vehicle requires a vehicle key"),
             Self::MissingSiteValue => formatter.write_str("--site requires a launch-site id"),
+            Self::MissingRecoveryDeckValue => {
+                formatter.write_str("--recovery-deck requires <latitude>,<longitude>")
+            }
             Self::MissingForceModelValue => {
                 formatter.write_str("--force-model requires a force-model key")
             }
             Self::UnknownSite(site) => write!(formatter, "unknown launch site '{site}'"),
+            Self::InvalidRecoveryDeck(value) => write!(
+                formatter,
+                "invalid recovery deck '{value}': expected <latitude>,<longitude> within range"
+            ),
             Self::UnknownForceModel(tier) => write!(formatter, "unknown force model '{tier}'"),
             Self::UnknownArgument(argument) => {
                 write!(formatter, "unknown launch argument '{argument}'")
@@ -90,10 +104,12 @@ where
         mode: Mode::Solar,
         vehicle: None,
         site: None,
+        recovery_deck: None,
         force_model: None,
     };
     let mut expect_vehicle_value = false;
     let mut expect_site_value = false;
+    let mut expect_recovery_deck_value = false;
     let mut expect_force_model_value = false;
     for arg in args {
         if expect_vehicle_value {
@@ -117,11 +133,20 @@ where
             expect_force_model_value = false;
             continue;
         }
+        if expect_recovery_deck_value {
+            let Some(deck) = parse_recovery_deck(&arg) else {
+                return Err(LaunchOptionError::InvalidRecoveryDeck(arg));
+            };
+            options.recovery_deck = Some(deck);
+            expect_recovery_deck_value = false;
+            continue;
+        }
         match arg.as_str() {
             "rocket" => options.mode = Mode::Rocket,
             "craft" => options.mode = Mode::Craft,
             "--vehicle" => expect_vehicle_value = true,
             "--site" => expect_site_value = true,
+            "--recovery-deck" => expect_recovery_deck_value = true,
             "--force-model" => expect_force_model_value = true,
             _ => return Err(LaunchOptionError::UnknownArgument(arg)),
         }
@@ -132,10 +157,24 @@ where
     if expect_site_value {
         return Err(LaunchOptionError::MissingSiteValue);
     }
+    if expect_recovery_deck_value {
+        return Err(LaunchOptionError::MissingRecoveryDeckValue);
+    }
     if expect_force_model_value {
         return Err(LaunchOptionError::MissingForceModelValue);
     }
     Ok(options)
+}
+
+/// Parse a sea-surface recovery deck from `<latitude>,<longitude>` degrees.
+/// The deck belongs to Earth and is specified in the terrain-radial convention
+/// used by the terrain source, capture poses and impact logs, so the measured
+/// ground track can be supplied directly. Altitude is the sea surface.
+pub fn parse_recovery_deck(value: &str) -> Option<RecoveryDeckCoordinates> {
+    let (latitude, longitude) = value.split_once(',')?;
+    let latitude: f64 = latitude.trim().parse().ok()?;
+    let longitude: f64 = longitude.trim().parse().ok()?;
+    RecoveryDeckCoordinates::try_new(latitude, longitude).ok()
 }
 
 /// Window-size override for measurement runs, in physical pixels.
@@ -307,6 +346,32 @@ mod tests {
             ]),
             Err(LaunchOptionError::UnknownForceModel("warp".to_string()))
         );
+    }
+
+    #[test]
+    fn parses_a_terrain_radial_recovery_deck() {
+        let parsed = options(&["rocket", "--recovery-deck", "25.84,-90.12"]);
+        let deck = parsed.recovery_deck.expect("deck parsed");
+        assert!((deck.latitude_deg - 25.84).abs() < 1e-9);
+        assert!((deck.longitude_deg + 90.12).abs() < 1e-9);
+
+        assert_eq!(
+            parse_launch_options(["rocket".to_string(), "--recovery-deck".to_string()]),
+            Err(LaunchOptionError::MissingRecoveryDeckValue)
+        );
+        for value in ["25.84", "91,0", "25.84,b", "a,b"] {
+            assert!(
+                matches!(
+                    parse_launch_options([
+                        "rocket".to_string(),
+                        "--recovery-deck".to_string(),
+                        value.to_string()
+                    ]),
+                    Err(LaunchOptionError::InvalidRecoveryDeck(_))
+                ),
+                "accepted {value:?}"
+            );
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::domain::services::guidance::{
     prograde_ascending_node_launch_heading, prograde_attitude, reentry_bank_angle,
     reentry_bank_angle_enhanced, roll_preserving_attitude_from_direction,
     target_surface_range_errors_m, terminal_landing_guidance, transfer_burn_phase, AutopilotMode,
-    DescentGuidanceConfig, TransferBurnPhase,
+    DescentGuidanceConfig, EntryBurnCommand, TransferBurnPhase,
 };
 use crate::domain::services::physics_orbital::orbital_elements_from_state_in_reference_frame;
 use crate::domain::services::reference_frames::{
@@ -14,13 +14,14 @@ use crate::domain::services::reference_frames::{
     planet_inertial_rotation_axis, planet_inertial_spin_axis,
 };
 use crate::domain::services::rocket_propulsion::{
-    stage_available_thrust_body, STANDARD_GRAVITY_MPS2,
+    engine_subset, stage_available_thrust_body, STANDARD_GRAVITY_MPS2,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::ecs::query::QueryData;
+use bevy::log::info;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -67,16 +68,52 @@ const APSIS_CAPTURE_DISTANCE_M: f64 = 1_000.0;
 /// Guidance can command an engine start, so it uses the stage's available
 /// thrust envelope rather than the currently running engine set. The active
 /// core capability still enforces synchronized inventory and recovery reserve.
-fn available_core_thrust_n(propulsion: &RocketPropulsion, ambient_pressure_pa: f64) -> f64 {
+/// A selected engine subset must be reflected here: using the full nine-engine
+/// envelope for a one-engine landing tells the terminal law it can decelerate
+/// at nine times the real rate and it ignites far too late.
+fn available_core_thrust_n(
+    propulsion: &RocketPropulsion,
+    ambient_pressure_pa: f64,
+    selected_engines: Option<u32>,
+) -> f64 {
     let Some(active_core_stage) = propulsion.active_core_stage() else {
         return 0.0;
     };
     if !active_core_stage.has_burnable_propellant() {
         return 0.0;
     }
-    stage_available_thrust_body(&active_core_stage.stage().engines, 1.0, ambient_pressure_pa)
+    let engines = engine_subset(&active_core_stage.stage().engines, selected_engines);
+    stage_available_thrust_body(engines, 1.0, ambient_pressure_pa)
         .0
         .length()
+}
+
+/// Burnable propellant on the active core stage, for transition logging.
+fn available_propellant_kg(propulsion: &RocketPropulsion) -> f64 {
+    propulsion
+        .active_core_stage()
+        .map_or(0.0, |stage| f64::from(stage.burnable_propellant_kg()))
+}
+
+/// Engine subset for the terminal landing burn. While either the speed or the
+/// altitude is above its switch value the stage keeps the high-thrust subset;
+/// only the final low, slow settle drops to the center engine. Absent when no
+/// downrange entry plan exists, leaving the existing return-to-launch
+/// full-stage behaviour untouched.
+fn landing_burn_engine_count(
+    entry_burn: Option<&EntryBurnState>,
+    speed_mps: f64,
+    altitude_m: f64,
+) -> Option<u32> {
+    entry_burn.map(|burn| {
+        if speed_mps > burn.plan.landing_burn_switch_speed_mps
+            || altitude_m > burn.plan.landing_burn_switch_altitude_m
+        {
+            burn.plan.landing_burn_engines
+        } else {
+            burn.plan.landing_engines
+        }
+    })
 }
 
 /// Feed a moving deck's domain prediction into the existing recovery guidance
@@ -94,8 +131,18 @@ pub fn update_drone_ship_landing_targets(
         if !target.prediction_horizon_s.is_finite() || target.prediction_horizon_s < 0.0 {
             continue;
         }
+        let first_assignment = autopilot.target_landing_position_m.length_squared() <= 1.0;
         autopilot.target_landing_position_m =
             ship.state.predict_position(target.prediction_horizon_s);
+        if first_assignment {
+            info!(
+                "Recovery deck target acquired: deck=({:.1}, {:.1}, {:.1}) m, horizon={:.1} s",
+                ship.state.position_m.x,
+                ship.state.position_m.y,
+                ship.state.position_m.z,
+                target.prediction_horizon_s
+            );
+        }
     }
 }
 
@@ -131,6 +178,10 @@ pub struct GuidanceAccess {
     /// Moving-deck target. When present it owns the landing target; the
     /// ground-pad update must not overwrite it.
     pub drone_ship_target: Option<&'static DroneShipLandingTarget>,
+    /// Downrange entry-burn sequencer. Absent on a return-to-launch profile.
+    pub entry_burn: Option<&'static mut EntryBurnState>,
+    /// Engine subset selected for the current recovery phase.
+    pub engine_selection: Option<&'static mut EngineSelection>,
 }
 
 /// Mission guidance: computes the target attitude from the mission phase and
@@ -163,6 +214,12 @@ pub fn guidance_system(
         let mission_state = &mut *access.mission_state;
         let autopilot = &mut *access.autopilot;
         let commands = &mut *access.commands;
+        let mut entry_burn = access.entry_burn.as_deref_mut();
+        let mut engine_selection = access.engine_selection.as_deref_mut();
+        let selected_engine_count = engine_selection.as_deref().map(|selection| {
+            // Read before the entry-burn block may write the subset.
+            selection.active_count
+        });
         let previous_autopilot_mode = autopilot.mode;
 
         // Guidance owns throttle targets. Preserve the established phase
@@ -204,7 +261,17 @@ pub fn guidance_system(
         }
         let up_dir = position_m / radius;
         let altitude_m = (radius - radius_m).max(0.0);
-        let radar_altitude_m = if collision.radar_altitude_m.is_finite() {
+        let radar_altitude_m = if drone_ship_target_present
+            && autopilot.target_landing_position_m.length_squared() > 1.0
+        {
+            // A deck is the landing surface. Terrain radar altitude over the
+            // ocean measures the sea floor several kilometres below, which
+            // ignites the terminal burn far too late. Deck-relative altitude is
+            // the same frame deck contact resolves in.
+            (position_m - autopilot.target_landing_position_m)
+                .dot(up_dir)
+                .max(0.0)
+        } else if collision.radar_altitude_m.is_finite() {
             collision.radar_altitude_m.max(0.0)
         } else {
             altitude_m
@@ -274,8 +341,11 @@ pub fn guidance_system(
         // engine lifecycle constraints as actuation. A nonzero tank that is
         // wholly reserved or has terminally depleted engines is not thrust
         // availability.
-        let has_active_engines =
-            available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0;
+        let has_active_engines = available_core_thrust_n(
+            propulsion,
+            conditions.ambient_pressure_pa,
+            selected_engine_count,
+        ) > 0.0;
 
         // Guidance constraints use the shared fixed-tick flight conditions.
         let dynamic_pressure_pa = conditions.dynamic_pressure_pa;
@@ -602,8 +672,23 @@ pub fn guidance_system(
                         default_surface_landing_target(position_m, radius_m);
                 }
 
-                let max_thrust =
-                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
+                let max_thrust = {
+                    let landing_engines = landing_burn_engine_count(
+                        entry_burn.as_deref(),
+                        surface_relative_speed_mps,
+                        radar_altitude_m,
+                    );
+                    if let (Some(count), Some(selection)) =
+                        (landing_engines, engine_selection.as_deref_mut())
+                    {
+                        selection.active_count = count;
+                    }
+                    available_core_thrust_n(
+                        propulsion,
+                        conditions.ambient_pressure_pa,
+                        landing_engines.or(selected_engine_count),
+                    )
+                };
                 if max_thrust <= 0.0 {
                     *mission_state = RocketMissionState::UnpoweredDescent;
                     autopilot.mode = AutopilotMode::Off;
@@ -636,8 +721,23 @@ pub fn guidance_system(
                 }
             }
             AutopilotMode::Landing => {
-                let max_thrust =
-                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
+                let max_thrust = {
+                    let landing_engines = landing_burn_engine_count(
+                        entry_burn.as_deref(),
+                        surface_relative_speed_mps,
+                        radar_altitude_m,
+                    );
+                    if let (Some(count), Some(selection)) =
+                        (landing_engines, engine_selection.as_deref_mut())
+                    {
+                        selection.active_count = count;
+                    }
+                    available_core_thrust_n(
+                        propulsion,
+                        conditions.ambient_pressure_pa,
+                        landing_engines.or(selected_engine_count),
+                    )
+                };
 
                 let gravity_accel = mu_m3_s2 / (radius * radius);
 
@@ -668,8 +768,11 @@ pub fn guidance_system(
                 if autopilot.target_landing_position_m.length() < 1.0 {
                     autopilot.target_landing_position_m = up_dir * radius_m;
                 }
-                let max_thrust =
-                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa);
+                let max_thrust = available_core_thrust_n(
+                    propulsion,
+                    conditions.ambient_pressure_pa,
+                    selected_engine_count,
+                );
 
                 let boostback = boostback_guidance(
                     position_m,
@@ -686,8 +789,11 @@ pub fn guidance_system(
                 // terminal gate goes straight to the landing leg; otherwise
                 // the stage must coast through the atmosphere engines-first
                 // before terminal guidance is meaningful.
-                let can_burn =
-                    available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0;
+                let can_burn = available_core_thrust_n(
+                    propulsion,
+                    conditions.ambient_pressure_pa,
+                    selected_engine_count,
+                ) > 0.0;
                 if boostback.complete || !can_burn {
                     autopilot.mode =
                         if radar_altitude_m < descent_config.terminal_descent_altitude_m {
@@ -716,8 +822,61 @@ pub fn guidance_system(
                     roll_preserving_attitude_from_direction(direction, rocket.dynamics.orientation);
                 commands.throttle_cmd = 0.0;
 
+                // A downrange recovery latches an entry burn at a descending
+                // altitude gate. The attitude law above already points the
+                // engines into the flow, so the burn only needs throttle and
+                // the correct engine subset. The latch lives in the domain
+                // sequence, not in a velocity threshold, so it cannot chatter
+                // through an apogee or re-light after cutoff.
+                if let (Some(burn), Some(selection)) =
+                    (entry_burn.as_mut(), engine_selection.as_mut())
+                {
+                    let was_started = burn.sequence.started;
+                    let was_complete = burn.sequence.complete;
+                    let command = burn.sequence.advance(
+                        altitude_m,
+                        surface_relative_velocity_mps.dot(up_dir),
+                        surface_relative_speed_mps,
+                        &burn.plan,
+                    );
+                    if !was_started && burn.sequence.started {
+                        info!(
+                            "Entry burn ignition at {:.1} km, {:.0} m/s: {} engines, {:.0} kg propellant",
+                            altitude_m / 1_000.0,
+                            surface_relative_speed_mps,
+                            burn.plan.engines,
+                            available_propellant_kg(propulsion)
+                        );
+                    }
+                    if !was_complete && burn.sequence.complete {
+                        info!(
+                            "Entry burn cutoff at {:.1} km, {:.0} m/s: {:.0} kg propellant",
+                            altitude_m / 1_000.0,
+                            surface_relative_speed_mps,
+                            available_propellant_kg(propulsion)
+                        );
+                    }
+                    match command {
+                        EntryBurnCommand::Burn => {
+                            commands.throttle_cmd = 1.0;
+                            selection.active_count = burn.plan.engines;
+                        }
+                        EntryBurnCommand::Coast => {
+                            selection.active_count = burn.plan.engines;
+                        }
+                        EntryBurnCommand::Complete => {
+                            selection.active_count = burn.plan.landing_engines;
+                        }
+                    }
+                }
+
                 if radar_altitude_m < descent_config.powered_descent_altitude_m {
-                    if available_core_thrust_n(propulsion, conditions.ambient_pressure_pa) > 0.0 {
+                    if available_core_thrust_n(
+                        propulsion,
+                        conditions.ambient_pressure_pa,
+                        selected_engine_count,
+                    ) > 0.0
+                    {
                         autopilot.mode = AutopilotMode::PoweredDescent;
                         *mission_state = RocketMissionState::PoweredDescent;
                     } else if radar_altitude_m < descent_config.terminal_descent_altitude_m {
@@ -808,6 +967,7 @@ mod tests {
     use crate::domain::services::body_orientation::BodyOrientation;
     use crate::domain::services::ephemeris::{NaifBodyId, TdbEpoch};
     use crate::domain::services::gravity::gravitational_parameter;
+    use crate::domain::services::guidance::{EntryBurnPlan, EntryBurnSequence};
     use crate::domain::services::planet_factory::PlanetFactory;
     use crate::domain::services::reference_frames::{
         body_fixed_to_planet_inertial, geodetic_to_body_fixed, surface_velocity_in_planet_inertial,
@@ -1477,6 +1637,34 @@ mod tests {
             target_up(engaged) < 0.5,
             "an engaged pitch-over must stay pitched over through apogee, got {}",
             target_up(engaged)
+        );
+    }
+
+    #[test]
+    fn landing_burn_keeps_the_high_thrust_subset_until_slow_and_low() {
+        let state = EntryBurnState {
+            sequence: EntryBurnSequence::default(),
+            plan: EntryBurnPlan::FALCON9_DOWNRANGE,
+        };
+        assert_eq!(
+            landing_burn_engine_count(Some(&state), 300.0, 5_000.0),
+            Some(3),
+            "high speed keeps three engines"
+        );
+        assert_eq!(
+            landing_burn_engine_count(Some(&state), 80.0, 5_000.0),
+            Some(3),
+            "high altitude keeps three engines even when slow"
+        );
+        assert_eq!(
+            landing_burn_engine_count(Some(&state), 80.0, 120.0),
+            Some(1),
+            "only the final low, slow settle drops to the center engine"
+        );
+        assert_eq!(
+            landing_burn_engine_count(None, 80.0, 120.0),
+            None,
+            "a return-to-launch profile keeps its existing full-stage selection"
         );
     }
 }

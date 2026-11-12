@@ -1096,6 +1096,25 @@ pub struct DroneShipLandingTarget {
     pub deck_contact: bool,
 }
 
+/// A drone ship that holds a body-fixed ocean station instead of an inertial
+/// point. Earth's surface carries the deck around the rotation axis, so an
+/// inertial station target would drift away from the ocean site by hundreds of
+/// kilometres over a recovery flight. The anchor is the authoritative deck
+/// position; the `DroneShip` state is refreshed from it each tick.
+#[derive(Component, Debug, Clone)]
+pub struct RecoveryDeckAnchor {
+    pub planet_name: CelestialBodyId,
+    pub position_body_fixed_m: DVec3,
+}
+
+/// Latched downrange entry-burn sequencing on a recovering stage. Absent on a
+/// return-to-launch profile, whose boostback law owns the whole descent.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct EntryBurnState {
+    pub sequence: crate::domain::services::guidance::EntryBurnSequence,
+    pub plan: crate::domain::services::guidance::EntryBurnPlan,
+}
+
 /// Orbital elements computed from rocket state vectors (planet-centered inertial frame).
 /// Updated by orbital_elements_system for telemetry and guidance.
 #[derive(Component, Debug, Clone, Copy, Default)]

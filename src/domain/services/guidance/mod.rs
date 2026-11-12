@@ -31,6 +31,7 @@ mod attitude;
 mod boostback;
 mod entry;
 mod landing;
+mod recovery_burn;
 mod transfer;
 
 pub use ascent::{
@@ -57,6 +58,7 @@ pub use landing::{
     default_surface_landing_target, hover_slam_guidance, powered_descent_guidance,
     powered_descent_guidance_convex, suicide_burn_guidance, terminal_landing_guidance,
 };
+pub use recovery_burn::{EntryBurnCommand, EntryBurnPlan, EntryBurnSequence};
 pub use transfer::{
     bielliptic_potentially_favorable, bielliptic_transfer, combined_maneuver_dv, deorbit_burn_dv,
     deorbit_burn_targeting, hohmann_transfer, transfer_burn_phase, BiellipticSolution,

@@ -518,8 +518,17 @@ pub fn resolve_ground_contact(
                     && *mission_state != RocketMissionState::Crashed
                 {
                     *mission_state = RocketMissionState::Crashed;
+                    let target_bf = orientation.map(|orientation| {
+                        planet_inertial_to_body_fixed(
+                            autopilot.target_landing_position_m,
+                            orientation,
+                        )
+                    });
+                    let target_lat_lon = target_bf.map(|target_bf| {
+                        body_fixed_to_terrain_lat_lon(target_bf.normalize_or_zero())
+                    });
                     bevy::log::info!(
-                        "Crash at ({lat:.2}, {lon:.2}): contact descent {:.2} m/s, lateral {:.2} m/s, tilt {:.1} deg, com speed {:.2} m/s, angular {:.3} rad/s",
+                        "Crash at ({lat:.5}, {lon:.5}) target={target_lat_lon:?}: contact descent {:.2} m/s, lateral {:.2} m/s, tilt {:.1} deg, com speed {:.2} m/s, angular {:.3} rad/s",
                         -components.normal_mps,
                         components.lateral_mps,
                         tilt_deg,

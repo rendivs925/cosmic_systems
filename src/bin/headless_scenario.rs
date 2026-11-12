@@ -3,6 +3,7 @@
 use cosmic_systems_wasm::application::headless_scenario::{
     run_headless_scenario_artifact, HeadlessScenario,
 };
+use cosmic_systems_wasm::application::modes::parse_recovery_deck;
 use cosmic_systems_wasm::domain::services::simulation_analysis::analyze_simulation_artifact;
 use cosmic_systems_wasm::domain::services::simulation_artifact::SimulationArtifact;
 use cosmic_systems_wasm::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
@@ -76,6 +77,15 @@ fn main() {
                     .next()
                     .unwrap_or_else(|| panic!("--scenario requires an identifier"));
                 scenario_id_explicit = true;
+            }
+            "--recovery-deck" => {
+                let value = arguments
+                    .next()
+                    .unwrap_or_else(|| panic!("--recovery-deck requires <latitude>,<longitude>"));
+                scenario.recovery_deck = Some(
+                    parse_recovery_deck(&value)
+                        .unwrap_or_else(|| panic!("invalid recovery deck '{value}'")),
+                );
             }
             "--output" => {
                 output = Some(

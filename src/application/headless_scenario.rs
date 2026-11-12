@@ -15,6 +15,7 @@ use crate::domain::services::simulation_time::{SimulationTime, DEFAULT_FIXED_TIM
 #[cfg(feature = "dem")]
 use crate::domain::services::terrain_source::DEFAULT_EARTH_DEM_PATH;
 use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
+use crate::domain::value_objects::recovery_deck::RecoveryDeckCoordinates;
 use crate::infrastructure::bevy_adapters::entity_components::{
     PlanetAtmosphere, PlanetComponent, PlanetTerrain,
 };
@@ -25,6 +26,7 @@ use crate::infrastructure::bevy_adapters::rocket::components::{
     LandingScorecard, ParachuteState, RecoveringStage, RocketMissionState, RocketPhysicsState,
     RocketPropulsion, RocketRcs, SpentStage, TerrainCollisionState,
 };
+use crate::infrastructure::bevy_adapters::rocket::recovery::RecoveryDeckRequest;
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
 use crate::infrastructure::bevy_adapters::rocket::telemetry::{
     build_simulation_telemetry_frame, record_simulation_telemetry_system,
@@ -56,6 +58,9 @@ pub struct HeadlessScenario {
     pub scenario_id: String,
     pub vehicle_key: Option<String>,
     pub launch_site: PredefinedLaunchSite,
+    /// Optional downrange recovery deck at the sea surface. Presence selects
+    /// the downrange profile: no boostback, an entry burn, then a deck landing.
+    pub recovery_deck: Option<RecoveryDeckCoordinates>,
     pub fixed_steps: u64,
 }
 
@@ -65,6 +70,7 @@ impl Default for HeadlessScenario {
             scenario_id: "papua-ascent".to_string(),
             vehicle_key: None,
             launch_site: PredefinedLaunchSite::Papua,
+            recovery_deck: None,
             fixed_steps: 64 * 60,
         }
     }
@@ -232,6 +238,9 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
     app.insert_resource(catalog);
     app.insert_resource(selection);
     app.insert_resource(scenario.launch_site);
+    if let Some(deck) = scenario.recovery_deck {
+        app.insert_resource(RecoveryDeckRequest(deck));
+    }
     app.add_plugins((EphemerisPlugin, RocketFixedSimulationPlugin));
     // Frame capture is consumed only by the artifact, so the headless
     // composition registers it instead of the interactive mode.

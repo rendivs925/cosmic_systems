@@ -63,8 +63,8 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 0e63601 |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 0e63601 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 0e63601 |
-| `cargo test --features dem --lib` | 1253 passed, 0 failed, 2 ignored | 0e63601 |
-| `cargo test --no-default-features --lib` | 1201 passed, 0 failed, 2 ignored | 0e63601 |
+| `cargo test --features dem --lib` | 1262 passed, 0 failed, 2 ignored | 0e63601 |
+| `cargo test --no-default-features --lib` | 1210 passed, 0 failed, 2 ignored | 0e63601 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 0e63601 |
 | `cargo build --release --features dem` | PASS | 0e63601 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 0e63601 |

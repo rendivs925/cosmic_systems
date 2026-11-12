@@ -154,7 +154,8 @@ use crate::infrastructure::bevy_adapters::rocket::propulsion::{
     propulsion_consumption, propulsion_gimbal, propulsion_staging, propulsion_thrust,
 };
 use crate::infrastructure::bevy_adapters::rocket::recovery::{
-    resolve_drone_ship_deck_contact, station_keep_drone_ships,
+    anchor_recovery_decks, ensure_recovery_deck_presentation, resolve_drone_ship_deck_contact,
+    spawn_recovery_decks, station_keep_drone_ships, sync_recovery_deck_presentation,
 };
 use crate::infrastructure::bevy_adapters::rocket::replay::{
     apply_replay_actions_system, record_replay_snapshot_system, replay_active, replay_inactive,
@@ -541,6 +542,9 @@ impl Plugin for RocketFixedSimulationPlugin {
             FixedUpdate,
             (
                 refresh_flight_conditions.in_set(RocketSet::Atmosphere),
+                anchor_recovery_decks
+                    .in_set(RocketSet::Recovery)
+                    .before(station_keep_drone_ships),
                 station_keep_drone_ships.in_set(RocketSet::Recovery),
                 update_drone_ship_landing_targets.in_set(RocketSet::Recovery),
                 apply_relaunch_requests
@@ -600,6 +604,11 @@ impl Plugin for RocketFixedSimulationPlugin {
                 record_replay_snapshot_system.in_set(RocketSet::Replay),
             ),
         );
+        // A recovery deck is an authoritative mission asset, not presentation:
+        // headless flights need it to resolve deck contact. Startup runs before
+        // the first fixed tick, and the anchor system supplies its inertial
+        // position from the evaluated ephemeris.
+        app.add_systems(Startup, spawn_recovery_decks);
     }
 }
 
@@ -767,6 +776,18 @@ impl Plugin for RocketModePlugin {
                 .chain(),
         );
         app.add_systems(Update, update_flight_starfield.after(apply_capture_pose));
+        // Deck visuals follow the authoritative body-fixed deck through the
+        // same render-origin boundary as the terrain and launch pad.
+        app.add_systems(
+            Update,
+            (
+                ensure_recovery_deck_presentation.after(recenter_render_origin),
+                sync_recovery_deck_presentation
+                    .after(ensure_recovery_deck_presentation)
+                    .after(recenter_render_origin),
+            )
+                .chain(),
+        );
 
         // Rocket HUD UI (runs in Update). Options/visibility are presentation
         // only and are applied before the cadence-limited value writer.

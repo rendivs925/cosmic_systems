@@ -890,26 +890,68 @@ or GAP in the scope where it is untested or unflown.
    A plane-change law would still be needed for off-nominal or plane-corrected
    insertion, but nothing in the current flight asks for one.
 
+## Recovery deck and downrange entry profile
+
+**Status: IMPLEMENTED and measured; a deck touchdown is not VERIFIED.** The
+recovery target can now be a body-fixed sea-surface deck supplied with
+`--recovery-deck <latitude>,<longitude>`. The deck is a simulation asset, not a
+presentation prop:
+
+- The input is **terrain-radial** latitude/longitude on the catalog mean radius,
+  the same convention as the terrain source, capture poses and impact logs. It
+  is deliberately not WGS-84 geodetic: at mid-latitudes the two differ by about
+  0.15° (17 km), which is larger than the deck itself.
+- The authoritative deck state is refreshed from the shared ephemeris every
+  recovery tick, so the platform rotates with the Earth. It is anchored, not
+  station-kept in an inertial frame; an inertial target would drift hundreds of
+  kilometres over a return flight.
+- Guidance measures deck altitude against the deck, not the terrain radar
+  altitude. Over the ocean the terrain datum is the sea floor about 3.2 km
+  below, which previously delayed the terminal ignition.
+- Deck contact resolves the touchdown verdict in the deck frame. A deck crash
+  now records the scorecard and emits one terminal crash event, like a ground
+  crash.
+- The downrange profile suppresses boostback, starts in `EntryDescent`, lights
+  a latched three-engine entry burn from 70 km to 55 km, then keeps three
+  engines for the high-speed landing burn and drops to the center engine only
+  when both speed and altitude are low. Available thrust is evaluated for the
+  selected engine subset; the return-to-launch profile still selects the full
+  stage, so its measured crash is unchanged.
+
+**Measured flight (25 t experimental reserve, Starbase, deck at
+25.57427, −89.31169).** Separation and insertion are unchanged. The entry burn
+lights at 70.0 km at 2,496 m/s with 24,521 kg aboard and cuts off at 55.0 km at
+2,273 m/s with 14,008 kg. Powered descent begins at 4.994 km and 1,065 m/s; the
+deck contact occurs at **242.35 m/s descent, 25.13 m/s lateral and 134.1° tilt**
+with 14,008 kg still aboard. This is a deck crash, not a landing. The remaining
+blocker is entry energy and flight-path shaping: the stage crosses the terminal
+gate at about 1.0 km/s, and a three-engine retro burn from 5 km cannot remove
+that energy. This is the same lift/crossflow gap recorded in residual 7 and the
+SC-03 residuals, not a tuning problem. The committed vehicle configuration stays
+at the 15 t reserve; 25 t is an experiment and is not committed.
+
 ## Validation
 
-The gate for this track is the project gate, run on the terminal-divert commit.
-It adds four drag-orientation tests and one terminal-divert test, so the floor
-rises to 1,252 with `dem` and 1,200 without; the previous floor was 1,247 and
-1,195.
+The gate for this track is the project gate, run on the recovery-deck commit. It
+adds eight tests (three entry-burn sequencing, two body-fixed deck, one deck
+input parse, two deck-coordinate validation) and one landing-engine-subset test,
+so the floor rises to 1,262 with `dem` and 1,210 without; the previous floor was
+1,253 and 1,201.
 
 | check | result |
 | --- | --- |
 | `cargo fmt --check` | PASS |
 | `cargo check --all-targets --features dem` | PASS |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
+| `cargo check --no-default-features` | PASS (5 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,252 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,200 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,262 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,210 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| recovery stage in the same flight | unchanged by the deck work: boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise; one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| downrange deck flight (25 t experiment, 42,000 ticks) | entry burn 70→55 km (24,521→14,008 kg, 2,496→2,273 m/s); powered descent at 4.994 km / 1,065 m/s; deck contact 242.35 m/s vertical, 25.13 m/s lateral, 134.1° tilt, 14,008 kg remaining; deck crash, not a landing |
 | reserve trade-off with grid fins (pre-center-engine) | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
 | 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes with 195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) crashes 158–622 km from the deck; re-flown after the fold it holds retrograde but still reaches 2.2 km/s at 15 km and peaks near 900 kPa |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |
