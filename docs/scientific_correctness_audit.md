@@ -116,10 +116,11 @@ pole, which is antiparallel to the rotation axis in this frame. See SC-08.
 
 **Model as found.** Body `+Y` is longitudinal. The X-plane flow angle is
 `atan2(−v_x, v_y)`, the Z-plane flow angle is `asin(v_z / |v|)`, drag opposes the
-velocity, the normal force is the component of body `+X` perpendicular to the
-flow scaled by `1.5·α_x`, and the side force is `lift_dir × v̂` scaled by
-`−0.8·β_z`. Each force therefore opposes the lateral flow component in its own
-plane, which the mirrored-force test pins.
+velocity with one constant `Cd = 0.3` for either end of the airframe, the normal
+force is the component of body `+X` perpendicular to the flow scaled by
+`1.5·α_x`, and the side force is `lift_dir × v̂` scaled by `−0.8·β_z`. Each force
+therefore opposes the lateral flow component in its own plane, which the
+mirrored-force test pins.
 
 **Defect 1 — the lateral axes were undefined.** The module comment said the side
 force "completes that basis toward body `+Z`" while the sideslip function called
@@ -202,10 +203,45 @@ cushioned by the spurious `π·slope` lateral force; the corrected model is
 steeper and faster. The remaining recovery failure is propellant/entry energy,
 not a tumble.
 
-**Residual — large-angle crossflow.** The fold fixes the 180° axial case, but
-the underlying linear law and the `lift_direction` basis are calibrated for
-small angles; near 90° they remain an analytic approximation, not tabulated
-crossflow data.
+**Defect 4 — the axial drag coefficient ignored the windward end (fixed
+2026-11-12).** `drag_force_body` used one constant `Cd = 0.3` regardless of which
+end of the airframe faced the flow. A booster entering engines-first does not
+present its pointed nose; it presents the blunt base — engine section and, on a
+recoverable stage, the entry heat shield. A flat-faced blunt body in the
+supersonic regime carries `Cd ≈ 1.0–1.2` on its frontal area (Hoerner-style
+flat-face cylinder data), while a streamlined nose is near `0.3`. The model also
+made the recovery stage *less* draggy than the generic spent-stage debris path,
+which already used `SPENT_STAGE_DRAG_COEFFICIENT = 0.9`.
+
+The fix keeps the nose-first value and blends toward a blunt-base value by the
+base-facing axial flow fraction,
+`w = max(0, −v_y/|v|)`:
+`Cd = Cd_nose·(1 − w) + 1.1·w`. Nose-first and transverse flow return the
+original coefficient exactly (`w = 0`), so the ascent, gravity-turn, and vacuum
+insertion paths are bit-for-bit unchanged; axial base-first flow returns `1.1`
+exactly, and the blend is continuous across ±90°. Nose-bluntness growth applies
+only to the nose-first term because a base-first entry presents the heat shield,
+not the nose. Four domain tests pin the flow weight, the exact prograde value,
+the blunt-base value, and the transverse/continuity behavior.
+
+Measured on the committed 15 t return-to-launch profile (same separation,
+insertion, and guidance; base drag is the only change): the crash moves from
+652.94 m/s vertical / 379.59 m/s lateral / 26.82° tilt to **186.10 m/s vertical
+/ 32.10 m/s lateral / 9.62° tilt** at T+501.078 s, with 0 kg propellant and the
+pad still 706.19 km away. The stage now decelerates through the dense
+atmosphere instead of arriving at 650 m/s; the residual failure is the RTLS
+energy budget, not the entry deceleration. A 25 t downrange variant re-flown with
+the same term reaches powered descent at 4.86 km with 3,989 kg and 282 m/s
+(versus a 596.83 m/s impact without it), which is the first measured recovery
+state with enough altitude for a terminal burn.
+
+**Residual — large-angle crossflow.** The fold fixes the 180° axial case, and the
+blunt-base blend fixes the axial coefficient, but the underlying lateral law and
+the `lift_direction` basis are calibrated for small angles; near 90° they remain
+an analytic approximation, not tabulated crossflow data. The base drag is a
+representative flat-face value, not a wind-tunnel measurement of this airframe,
+and the model still omits the base-pressure rise a retro plume produces (the
+SC-01 thrust side of that interaction is applied separately).
 
 ## SC-04 — Per-thruster RCS allocation
 
@@ -475,11 +511,14 @@ the T+501.078 s crash.
 
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
-exercised by the 5,400 s headless flight. The retrograde aero fold is
-domain-tested and re-flown: the booster now enters engines-first at `α ≈ 179.7°`
-with body rate `≈ 0` through the high-dynamic-pressure rise, but a landing is
-not verified. The residuals above bound the claim; recovery energy sequencing,
-entry trajectory shaping, and station/tank fidelity remain outside it.
+exercised by the 5,400 s headless flight. The retrograde aero fold and the
+blunt-base drag term are domain-tested and re-flown: the booster now enters
+engines-first at `α ≈ 179.7°` with body rate `≈ 0` through the high-dynamic-
+pressure rise, and base-first drag cuts the committed RTLS impact from 652.94 to
+186.10 m/s. A landing is still not verified; the committed return-to-launch
+profile is 706 km short with no propellant. The residuals above bound the claim:
+recovery energy sequencing, downrange terminal guidance, entry trajectory
+shaping, and station/tank fidelity remain outside it.
 
 ## SC-05 — Closed-loop orbit insertion
 
@@ -825,10 +864,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the recovery-lifecycle
-commit. It adds three aero-fold tests and two lifecycle tests, so the floor
-rises to 1,247 with `dem` and 1,195 without; the previous floor was 1,242 and
-1,190.
+The gate for this track is the project gate, run on the blunt-base-drag
+commit. It adds four drag-orientation tests, so the floor rises to 1,251 with
+`dem` and 1,199 without; the previous floor was 1,247 and 1,195.
 
 | check | result |
 | --- | --- |
@@ -836,13 +874,13 @@ rises to 1,247 with `dem` and 1,195 without; the previous floor was 1,242 and
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,247 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,195 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,251 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,199 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (652.94 m/s vertical, 379.59 m/s lateral, 26.82° tilt, 0.897 rad/s, 710.88 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (186.10 m/s vertical, 32.10 m/s lateral, 9.62° tilt, 706.19 km short); 0 kg propellant, `Crashed` at T+5,400 s |
 | reserve trade-off with grid fins (pre-center-engine) | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
 | 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes with 195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) crashes 158–622 km from the deck; re-flown after the fold it holds retrograde but still reaches 2.2 km/s at 15 km and peaks near 900 kPa |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |

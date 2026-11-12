@@ -27,8 +27,9 @@
 //! - Mach: `M = v / a`.
 //! - X-plane flow angle: `α_x = atan2(−v_x, v_y)` in the body frame.
 //! - Z flow angle: `β_z = asin(v_z / |v|)` in the body frame.
-//! - Coefficients (analytic approximations, documented limits): constant base
-//!   drag `Cd = 0.3`, and the same linear normal-force slope in both lateral
+//! - Coefficients (analytic approximations, documented limits): axial drag
+//!   `Cd = 0.3` for nose-first flow, rising to a blunt-face `Cd = 1.1` for
+//!   base-first flow, and the same linear normal-force slope in both lateral
 //!   planes, `Cn_x = 1.5·α_x` and `Cn_z = −1.5·β_z`. `α_x` is folded to the
 //!   nearest body end for the normal-force law: an axisymmetric airframe flown
 //!   engines-first sees the same lateral physics as the equivalent small angle
@@ -42,7 +43,11 @@
 //!   can replace these behind the same interface.
 //! - Drag opposes velocity. The X normal force acts along body +X projected
 //!   perpendicular to velocity; the Z force acts along `lift_dir × v̂` for
-//!   nose-first flow. Coefficient signs carry deflection direction.
+//!   nose-first flow. Coefficient signs carry deflection direction. The axial
+//!   drag coefficient blends between the nose-first value and the blunt-base
+//!   value by the base-facing flow fraction, so a booster descending
+//!   engines-first presents its blunt aft face (a launch-vehicle base) rather
+//!   than the coefficient of the pointed nose.
 //! - Center of pressure is a simple geometric estimate forward of the
 //!   mid-length; aerodynamic torque is `τ = (r_CoP − r_COM) × F`.
 
@@ -112,13 +117,62 @@ pub fn folded_normal_flow_angle(alpha_rad: f64) -> f64 {
     }
 }
 
+/// Axial drag coefficient for nose-first flow, referenced to the frontal
+/// area. The vehicle is streamlined toward the nose, so its axial drag is
+/// modest. Documented approximation; tabulated data can replace it behind the
+/// same interface.
+pub const AXIAL_DRAG_COEFFICIENT: f64 = 0.3;
+
+/// Axial drag coefficient for base-first flow, referenced to the same frontal
+/// area. A launch-vehicle base is a blunt face — engine section and, on a
+/// recoverable stage, the entry heat shield — not a pointed forebody. A
+/// flat-faced blunt body in the supersonic regime carries `Cd ≈ 1.0–1.2`;
+/// `1.1` is a representative value (Hoerner-style flat-face cylinder data),
+/// not a wind-tunnel measurement of this airframe. It is the coefficient a
+/// descending booster actually presents, and omitting it made the recovery
+/// stage less draggy than the generic spent-stage debris path.
+pub const BASE_FIRST_AXIAL_DRAG_COEFFICIENT: f64 = 1.1;
+
+/// Fraction of the flow that reaches the blunt base, in `[0, 1]`.
+///
+/// Body `+Y` is tail-to-nose, so a nose-first flow has `v_y > 0` and a
+/// base-first flow has `v_y < 0`. The weight is the axial component of the
+/// base-facing flow direction: exactly 1 for axial base-first flow, 0 for any
+/// nose-first or purely transverse flow, and continuous across ±90°.
+pub fn base_first_flow_weight(body_velocity: DVec3) -> f64 {
+    let speed = body_velocity.length();
+    if speed < 1e-9 {
+        0.0
+    } else {
+        (-body_velocity.y / speed).max(0.0)
+    }
+}
+
+/// Axial drag coefficient for the current flow orientation.
+///
+/// `nose_first_cd` is the coefficient the model already computes (including
+/// nose-bluntness growth). It is blended toward
+/// [`BASE_FIRST_AXIAL_DRAG_COEFFICIENT`] by
+/// [`base_first_flow_weight`]. Nose-first flow returns `nose_first_cd`
+/// exactly, so the prograde ascent path is unchanged; axial base-first flow
+/// returns the blunt-face value exactly. Ablation grows the nose-first term
+/// only, because a base-first entry presents the heat shield, not the nose.
+pub fn drag_coefficient_for_flow(nose_first_cd: f64, body_velocity: DVec3) -> f64 {
+    let base_weight = base_first_flow_weight(body_velocity);
+    nose_first_cd * (1.0 - base_weight) + BASE_FIRST_AXIAL_DRAG_COEFFICIENT * base_weight
+}
+
 /// Analytic aerodynamic coefficients for the two lateral body axes:
 /// `(cd, cn_x, cn_z)` from the X-plane and Z-plane flow angles. `cn_x` scales
 /// the normal force along +X; `cn_z` scales the side force along `lift_dir × v̂`
 /// (body +Z for nose-first flow). Linear models; documented approximations.
 /// Both lateral slopes have the same magnitude by axisymmetry.
+///
+/// `cd` here is the nose-first axial value; the caller blends it for a
+/// base-first flow with [`drag_coefficient_for_flow`], which needs the body
+/// velocity the coefficient pair does not carry.
 pub fn aerodynamic_coefficients(alpha_rad: f64, beta_rad: f64) -> (f64, f64, f64) {
-    let cd = 0.3;
+    let cd = AXIAL_DRAG_COEFFICIENT;
     let cn_x = LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * folded_normal_flow_angle(alpha_rad);
     let cn_z = -LATERAL_NORMAL_FORCE_SLOPE_PER_RAD * beta_rad;
     (cd, cn_x, cn_z)
@@ -549,5 +603,75 @@ mod tests {
             assert!(cd <= 0.6 + 1e-12, "Cd capped at 2x baseline");
             previous_cd = cd;
         }
+    }
+
+    /// A booster descending engines-first has body velocity along −Y. The base
+    /// is then the windward face, so the flow weight must be exactly 1 there
+    /// and 0 for the nose-first and purely transverse cases.
+    #[test]
+    fn base_first_flow_weight_is_the_axial_base_facing_fraction() {
+        assert_eq!(base_first_flow_weight(DVec3::new(0.0, -100.0, 0.0)), 1.0);
+        assert_eq!(base_first_flow_weight(DVec3::new(0.0, 100.0, 0.0)), 0.0);
+        assert_eq!(base_first_flow_weight(DVec3::new(100.0, 0.0, 0.0)), 0.0);
+        assert_eq!(base_first_flow_weight(DVec3::new(0.0, 0.0, -100.0)), 0.0);
+        assert_eq!(base_first_flow_weight(DVec3::ZERO), 0.0);
+        // A 30° base-first flow reaches the base with its axial fraction.
+        let angle = 30.0_f64.to_radians();
+        let weight = base_first_flow_weight(DVec3::new(0.0, -angle.cos(), angle.sin()) * 100.0);
+        assert!((weight - angle.cos()).abs() < 1e-12);
+    }
+
+    /// Prograde ascent must remain bit-for-bit identical: the blend returns the
+    /// nose-first coefficient exactly when no flow reaches the base.
+    #[test]
+    fn nose_first_drag_coefficient_is_unchanged() {
+        let body_velocity = DVec3::new(3.0, 200.0, -2.0);
+        let (cd, _, _) = aerodynamic_coefficients(angle_of_attack(body_velocity), 0.0);
+        assert_eq!(drag_coefficient_for_flow(cd, body_velocity), cd);
+        assert_eq!(
+            drag_coefficient_for_flow(0.45, body_velocity),
+            0.45,
+            "nose-bluntness growth must pass through untouched"
+        );
+    }
+
+    /// Axial engines-first flow presents the blunt base, so the axial drag
+    /// coefficient is the blunt-face value regardless of nose ablation.
+    #[test]
+    fn axial_base_first_flow_uses_the_blunt_face_coefficient() {
+        let body_velocity = DVec3::new(0.0, -200.0, 0.0);
+        assert_eq!(
+            drag_coefficient_for_flow(AXIAL_DRAG_COEFFICIENT, body_velocity),
+            BASE_FIRST_AXIAL_DRAG_COEFFICIENT
+        );
+        assert_eq!(
+            drag_coefficient_for_flow(0.6, body_velocity),
+            BASE_FIRST_AXIAL_DRAG_COEFFICIENT,
+            "base-first entry presents the heat shield, not an ablated nose"
+        );
+        let drag = drag_force_body(
+            dynamic_pressure_q(1.225, 200.0),
+            drag_coefficient_for_flow(AXIAL_DRAG_COEFFICIENT, body_velocity),
+            AREA,
+            body_velocity,
+        );
+        assert!(
+            drag.y > 0.0,
+            "base-first drag must oppose a −Y flow by pushing +Y"
+        );
+        assert!(drag.x.abs() < 1e-9 && drag.z.abs() < 1e-9);
+    }
+
+    /// A purely transverse flow has no axial component, so it must keep the
+    /// nose-first coefficient and not gain blunt-base drag from the blend.
+    #[test]
+    fn transverse_flow_keeps_the_nose_first_drag_coefficient() {
+        assert_eq!(
+            drag_coefficient_for_flow(0.3, DVec3::new(0.0, 0.0, 100.0)),
+            0.3
+        );
+        // Just past ±90° the weight is continuous, not a step.
+        let past = drag_coefficient_for_flow(0.3, DVec3::new(0.0, -1.0, 100.0));
+        assert!(past > 0.3 && past < BASE_FIRST_AXIAL_DRAG_COEFFICIENT);
     }
 }

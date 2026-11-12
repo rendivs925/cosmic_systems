@@ -63,12 +63,12 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | 6a7d4e0 |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 6a7d4e0 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 6a7d4e0 |
-| `cargo test --features dem --lib` | 1247 passed, 0 failed, 2 ignored | cf7f179 |
-| `cargo test --no-default-features --lib` | 1195 passed, 0 failed, 2 ignored | cf7f179 |
+| `cargo test --features dem --lib` | 1251 passed, 0 failed, 2 ignored | cf7f179 |
+| `cargo test --no-default-features --lib` | 1199 passed, 0 failed, 2 ignored | cf7f179 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | 6a7d4e0 |
 | `cargo build --release --features dem` | PASS | 6a7d4e0 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 6a7d4e0 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise, one crash at T+501.078 s (652.94 m/s, 26.82° tilt, 710.88 km short) | cf7f179 |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.10 m/s, one crash at T+501.078 s (186.10 m/s vertical, 32.10 m/s lateral, 9.62° tilt, 706.19 km short) | cf7f179 |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |

@@ -7,8 +7,8 @@ use super::components::{
 };
 use crate::domain::services::aerodynamics::{
     aerodynamic_coefficients_with_nose_bluntness, aerodynamic_torque_body, angle_of_attack,
-    angle_of_sideslip, center_of_pressure_m, drag_force_body, lift_force_body, side_force_body,
-    update_max_q,
+    angle_of_sideslip, center_of_pressure_m, drag_coefficient_for_flow, drag_force_body,
+    lift_force_body, side_force_body, update_max_q,
 };
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::infrastructure::bevy_adapters::entity_components::EntryPhysicsConfig;
@@ -91,11 +91,16 @@ pub fn aerodynamic_forces(
             } else {
                 1.0
             };
-        let (cd, cn_x, cn_z) = aerodynamic_coefficients_with_nose_bluntness(
+        let (nose_first_cd, cn_x, cn_z) = aerodynamic_coefficients_with_nose_bluntness(
             angle_of_attack(body_velocity),
             angle_of_sideslip(body_velocity),
             nose_radius_ratio,
         );
+        // The axial drag coefficient depends on which end of the airframe faces
+        // the flow: a booster entering engines-first presents its blunt base,
+        // not the pointed nose. The blend returns `nose_first_cd` exactly for
+        // prograde flow, so the ascent path is unchanged.
+        let cd = drag_coefficient_for_flow(nose_first_cd, body_velocity);
         let q = conditions.dynamic_pressure_pa;
         let force_body = drag_force_body(q, cd, reference_area_m2, body_velocity)
             + lift_force_body(q, cn_x, reference_area_m2, body_velocity)
