@@ -184,6 +184,16 @@ pub fn hover_slam_guidance(
 /// controller combines a stopping-distance brake with velocity damping and
 /// limits lateral acceleration to a strict thrust-vector tilt envelope. It
 /// never commands a downward-pointing main engine near the ground.
+///
+/// Above [`DIVERT_SPEED_MPS`] the law is a three-dimensional retrograde
+/// suicide burn: it coasts while the target is farther than the distance a
+/// maximum-thrust retro burn can null, then points the engine opposite the
+/// velocity vector. That is the only phase that can remove a large horizontal
+/// component without tilting the main engine far from the deck normal; it
+/// requires a target on the vehicle's natural ground track (a downrange deck
+/// placed at the ballistic impact point), not a pad the vehicle has already
+/// overflown. Below the divert speed the existing tilt-limited terminal law
+/// takes over for the final settle.
 pub fn terminal_landing_guidance(
     position_m: DVec3,
     velocity_mps: DVec3,
@@ -195,6 +205,9 @@ pub fn terminal_landing_guidance(
 ) -> (DVec3, DQuat) {
     const MAX_TILT_RAD: f64 = 12.0_f64.to_radians();
     const LANDING_MARGIN_M: f64 = 15.0;
+    /// Speed below which the retrograde divert gives way to the vertical
+    /// terminal law, m/s.
+    const DIVERT_SPEED_MPS: f64 = 25.0;
     let up_dir = position_m.normalize_or_zero();
     let mass_kg = mass_kg.max(1.0);
     let max_accel_mps2 = (max_thrust_n / mass_kg).max(0.0);
@@ -203,6 +216,32 @@ pub fn terminal_landing_guidance(
     }
 
     let altitude_m = radar_altitude_m.max(0.0);
+    let speed_mps = velocity_mps.length();
+
+    // High-speed divert. The available deceleration along the velocity is the
+    // thrust minus the gravity component that accelerates the vehicle along
+    // that same direction. Coast until a maximum-thrust retro burn can just
+    // null the velocity before reaching the target, then burn retrograde.
+    if speed_mps > DIVERT_SPEED_MPS {
+        let velocity_unit = velocity_mps / speed_mps;
+        let gravity_along_velocity_mps2 = (-up_dir * gravity_accel_mps2).dot(velocity_unit);
+        let net_decel_mps2 = max_accel_mps2 - gravity_along_velocity_mps2;
+        let stopping_distance_m = if net_decel_mps2 > 0.0 {
+            speed_mps.powi(2) / (2.0 * net_decel_mps2)
+        } else {
+            f64::INFINITY
+        };
+        let distance_to_target_m = (target_position_m - position_m).length();
+        let thrust_direction = -velocity_unit;
+        if distance_to_target_m <= stopping_distance_m + LANDING_MARGIN_M {
+            return (
+                thrust_direction * max_thrust_n,
+                attitude_from_direction(thrust_direction),
+            );
+        }
+        return (DVec3::ZERO, attitude_from_direction(thrust_direction));
+    }
+
     let vertical_speed_mps = velocity_mps.dot(up_dir);
     let horizontal_velocity_mps = velocity_mps - up_dir * vertical_speed_mps;
     let target_offset_m = target_position_m - position_m;

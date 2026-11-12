@@ -623,7 +623,10 @@ pub fn guidance_system(
                     max_thrust,
                     gravity_accel,
                 );
-                commands.target_attitude = thrust_att;
+                commands.target_attitude = roll_preserving_attitude_from_direction(
+                    thrust_att * DVec3::Y,
+                    rocket.dynamics.orientation,
+                );
                 commands.throttle_cmd = (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32;
 
                 // Check for terminal guidance transition.
@@ -647,7 +650,10 @@ pub fn guidance_system(
                     max_thrust,
                     gravity_accel,
                 );
-                commands.target_attitude = thrust_att;
+                commands.target_attitude = roll_preserving_attitude_from_direction(
+                    thrust_att * DVec3::Y,
+                    rocket.dynamics.orientation,
+                );
                 commands.throttle_cmd = if max_thrust > 0.0 {
                     (thrust_vec.length() / max_thrust).clamp(0.0, 1.0) as f32
                 } else {

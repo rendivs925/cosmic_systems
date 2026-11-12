@@ -226,8 +226,8 @@ the blunt-base value, and the transverse/continuity behavior.
 
 Measured on the committed 15 t return-to-launch profile (same separation,
 insertion, and guidance; base drag is the only change): the crash moves from
-652.94 m/s vertical / 379.59 m/s lateral / 26.82° tilt to **186.10 m/s vertical
-/ 32.10 m/s lateral / 9.62° tilt** at T+501.078 s, with 0 kg propellant and the
+652.94 m/s vertical / 379.59 m/s lateral / 26.82° tilt to **186.15 m/s vertical
+/ 31.82 m/s lateral / 8.73° tilt** at T+501.078 s, with 0 kg propellant and the
 pad still 706.19 km away. The stage now decelerates through the dense
 atmosphere instead of arriving at 650 m/s; the residual failure is the RTLS
 energy budget, not the entry deceleration. A 25 t downrange variant re-flown with
@@ -509,13 +509,41 @@ zero. The committed 15 t return-to-launch flight is unchanged because guidance
 re-derives the same pad position on the first tick; the re-flight reproduces
 the T+501.078 s crash.
 
+**Terminal divert law (implemented 2026-11-12).** The vertical terminal law's
+non-braking branch held a 3–45 m/s descent-rate target, so a stage arriving
+at 5 km with a large horizontal component had no way to null it: the law
+commanded almost no horizontal acceleration above the braking window.
+`terminal_landing_guidance` now has a three-dimensional retrograde divert above
+25 m/s. It coasts until a maximum-thrust retro burn can null the velocity within
+the remaining distance to the target (`v² / 2(a_max − g·v̂)`), then points the
+engine opposite the velocity vector; below 25 m/s the existing tilt-limited
+terminal law settles the vehicle. This is the only phase that can remove a large
+horizontal component without tilting the main engine far from the deck normal.
+It requires a target on the natural ground track — a downrange deck placed where
+the stage would otherwise impact — not a pad the stage has already overflown.
+Four domain cases pin the prograde/transverse coefficient behavior and the
+divert: brake inside the stopping distance, coast beyond it, retrograde attitude,
+and the unchanged sub-25 m/s settle. The adapter now builds the terminal target
+with `roll_preserving_attitude_from_direction`, so the divert does not command a
+roll slew. No baseline changes; the committed RTLS flight still crashes at
+T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short,
+0 kg propellant) because its pad is 706 km away and the stage is out of
+propellant.
+
+A downrange attempt with a body-fixed sea-floor site reached the terminal phase
+but did not land: the stage crosses a continental-shelf cell whose terrain is
+3.3 km above the trench-floor target, so ground contact happens before the
+target. That is the missing water-surface/flat-deck input (residual 7), not the
+divert law. A deck at a fixed deck plane is the correct next mission input; the
+model already has `DroneShipLandingTarget` and deck-relative contact.
+
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
 exercised by the 5,400 s headless flight. The retrograde aero fold and the
 blunt-base drag term are domain-tested and re-flown: the booster now enters
 engines-first at `α ≈ 179.7°` with body rate `≈ 0` through the high-dynamic-
 pressure rise, and base-first drag cuts the committed RTLS impact from 652.94 to
-186.10 m/s. A landing is still not verified; the committed return-to-launch
+186.15 m/s. A landing is still not verified; the committed return-to-launch
 profile is 706 km short with no propellant. The residuals above bound the claim:
 recovery energy sequencing, downrange terminal guidance, entry trajectory
 shaping, and station/tank fidelity remain outside it.
@@ -864,9 +892,10 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the blunt-base-drag
-commit. It adds four drag-orientation tests, so the floor rises to 1,251 with
-`dem` and 1,199 without; the previous floor was 1,247 and 1,195.
+The gate for this track is the project gate, run on the terminal-divert commit.
+It adds four drag-orientation tests and one terminal-divert test, so the floor
+rises to 1,252 with `dem` and 1,200 without; the previous floor was 1,247 and
+1,195.
 
 | check | result |
 | --- | --- |
@@ -874,13 +903,13 @@ commit. It adds four drag-orientation tests, so the floor rises to 1,251 with
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,251 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,199 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,252 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,200 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
 | headless Falcon 9 flight (Starbase, 345,600 ticks = 5,400 s) | ascent cut at T+448.203 s (137.076 km, 7,824.236 m/s); one circularization burn T+1719.5–1720.72 s; accepted 201.1783 x 199.9759 km (e ≈ 9.1e-5 from the apsides); 42.483 kg RCS propellant; 23,858.331 kg at T+5,400 s |
-| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (186.10 m/s vertical, 32.10 m/s lateral, 9.62° tilt, 706.19 km short); 0 kg propellant, `Crashed` at T+5,400 s |
+| recovery stage in the same flight | inherits the launch site, RCS cluster, four grid fins and an all-nine `EngineSelection`; boostback → engines-first `EntryDescent`; holds α ≈ 179.7° with body rate below 0.5 rad/s through the T+435–500 dynamic-pressure rise (peak 870 kPa); one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short); 0 kg propellant, `Crashed` at T+5,400 s |
 | reserve trade-off with grid fins (pre-center-engine) | 25 t preserves insertion (200.526 × 199.353 km) and improves the crash to T+553.813 s, 305.62 m/s, 37.65° tilt, 549.01 km short — still a crash; 40 t breaks the ascent (separation T+135.1 s, Ascent→Reentry at 116.7 km); the committed config stays at 15 t |
 | 25 t + center engine + one-engine subset (experiment, not committed) | insertion 200.526 × 199.353 km; RTLS reaches powered descent with 4.186 t left but crashes with 195.85 m/s vertical, 222.57 m/s lateral, 39.05° tilt, 520.54 km short. A downrange deck profile with a three-engine entry burn (25.4 → 5.07 t, 2537 → 1890 m/s) crashes 158–622 km from the deck; re-flown after the fold it holds retrograde but still reaches 2.2 km/s at 15 km and peaks near 900 kPa |
 | RCS authority A/B | roll-slew fix (`0e333b0`): 5.0e7 / 5.0e6 / 1.0e6 / 5.0e5 N·m all hand off near 137.7 km, 1.0e5 cuts at 100 km/1,873 m/s, 2.0e4 loses control at ~T+145 s; after it, 5.0e3 and 2.0e4 circularize and 100 N·m still reaches the ascent cut. Per-thruster split (`70bfef5` vs `976f998`): accepted 201.1783 x 199.9759 vs 200.847 x 199.238 km, RCS 42.483 vs 0 kg, final mass 23,858.331 vs 23,901.016 kg |

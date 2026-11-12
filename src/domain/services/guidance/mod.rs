@@ -969,4 +969,51 @@ mod tests {
             "terminal attitude must remain inside the landing tilt envelope"
         );
     }
+
+    /// Above the divert speed the law must coast until a maximum-thrust retro
+    /// burn can null the velocity within the remaining distance, then point the
+    /// engine opposite the velocity. A target beyond that distance must not
+    /// spend propellant: the high-speed stage has no way to stop short of it.
+    #[test]
+    fn terminal_guidance_retro_burns_only_inside_the_stopping_distance() {
+        let up = DVec3::X;
+        let position = up * 5_000.0;
+        // 600 m/s on a ~60-degree flight path toward +Z.
+        let velocity = -up * 520.0 + DVec3::Z * 150.0;
+        let along_track_target = position - up * 5_000.0 + DVec3::Z * 1_800.0;
+        let (thrust, attitude) = terminal_landing_guidance(
+            position,
+            velocity,
+            along_track_target,
+            5_000.0,
+            30_000.0,
+            845_000.0,
+            9.81,
+        );
+        assert!(
+            thrust.dot(velocity) < 0.0,
+            "the divert must oppose velocity: {thrust:?}"
+        );
+        assert!((thrust.length() - 845_000.0).abs() < 1e-6);
+        assert!(
+            (attitude * DVec3::Y).angle_between(-velocity.normalize()) < 1e-9,
+            "the divert attitude must point retrograde"
+        );
+
+        let beyond_stopping_distance = position - up * 5_000.0 + DVec3::Z * 700_000.0;
+        let (coast, _) = terminal_landing_guidance(
+            position,
+            velocity,
+            beyond_stopping_distance,
+            5_000.0,
+            30_000.0,
+            845_000.0,
+            9.81,
+        );
+        assert_eq!(
+            coast,
+            DVec3::ZERO,
+            "a target beyond the stopping distance must not burn propellant"
+        );
+    }
 }
