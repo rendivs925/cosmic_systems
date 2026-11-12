@@ -350,9 +350,12 @@ mod engine_lifecycle_pipeline_tests {
 
         let propulsion = app.world().get::<RocketPropulsion>(entity).unwrap();
         assert_eq!(propulsion.propellant_remaining_kg[0], 100.0);
+        // The reserve is protected, but the hardware is not terminally
+        // depleted: a recoverable stage must be able to shut down here and
+        // restart its engines after separation.
         assert_eq!(
             propulsion.vehicle.stages[0].engines[0].state,
-            EngineState::Depleted
+            EngineState::Off
         );
         assert_eq!(
             app.world()

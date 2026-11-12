@@ -269,9 +269,19 @@ fn command_engine_lifecycle(
         propulsion.time_since_separation_s,
         propulsion.ullage_settle_time_s,
     );
-    let core_has_propellant = propulsion
-        .active_core_stage()
-        .is_some_and(|stage| stage.has_burnable_propellant());
+    // A recoverable stage deliberately holds propellant back from its ascent
+    // burn. Reaching that floor is not hardware depletion: the stage is about
+    // to separate and own the reserve. Shut the engines down instead of
+    // marking them terminally depleted, or the recovery burn can never light.
+    let (core_has_burnable, core_has_reserve) =
+        propulsion
+            .active_core_stage()
+            .map_or((false, false), |stage| {
+                (
+                    stage.has_burnable_propellant(),
+                    stage.recovery_reserve_kg() > 0.0,
+                )
+            });
     let mut started = 0;
     let mut stopped = 0;
     if let Some(stage) = propulsion.vehicle.stages.get_mut(propulsion.active_stage) {
@@ -281,8 +291,8 @@ fn command_engine_lifecycle(
             .min(stage.engines.len());
         for (index, engine) in stage.engines.iter_mut().enumerate() {
             let was_running = engine.state == EngineState::Running;
-            let engine_commanded = run_commanded && index < selected;
-            if core_has_propellant {
+            let engine_commanded = run_commanded && index < selected && core_has_burnable;
+            if core_has_burnable || core_has_reserve {
                 engine.command_lifecycle(engine_commanded, ignition_permitted);
             } else {
                 engine.deplete();
@@ -350,5 +360,68 @@ fn write_engine_lifecycle_events(
             stage_index,
             engines_stopped: stopped,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entities::rocket::Rocket;
+
+    fn recoverable_propulsion() -> RocketPropulsion {
+        let vehicle = Rocket::falcon9_test_fixture();
+        RocketPropulsion::for_fresh_flight(vehicle, 0.0, 0.0)
+    }
+
+    /// A recoverable stage reaches its reserve floor while the ascent engines
+    /// are still running. That is a shutdown, not terminal hardware depletion:
+    /// the separated stage must be able to light its boostback/entry engines.
+    #[test]
+    fn reserve_floor_shuts_down_instead_of_depleting_recovery_engines() {
+        let mut propulsion = recoverable_propulsion();
+        let reserve_kg = propulsion.vehicle.stages[0]
+            .recovery_propellant_reserve_kg
+            .expect("fixture first stage is recoverable");
+        propulsion.propellant_remaining_kg[0] = reserve_kg;
+        for engine in &mut propulsion.vehicle.stages[0].engines {
+            engine.state = EngineState::Running;
+            engine.ignition_count = 1;
+        }
+
+        let (_started, stopped) = command_engine_lifecycle(&mut propulsion, true, None);
+        assert!(stopped > 0, "the ascent burn must shut down at the floor");
+        assert!(propulsion.vehicle.stages[0]
+            .engines
+            .iter()
+            .all(|engine| engine.state == EngineState::Off));
+
+        // The recovery stage clears the reserve marker and re-lights its
+        // engines through the normal lifecycle path.
+        propulsion.vehicle.stages[0].recovery_propellant_reserve_kg = None;
+        let (started, _stopped) = command_engine_lifecycle(&mut propulsion, true, None);
+        assert_eq!(
+            started as usize,
+            propulsion.vehicle.stages[0].engines.len(),
+            "every selected engine must restart after separation"
+        );
+        assert!(propulsion.vehicle.stages[0]
+            .engines
+            .iter()
+            .all(|engine| engine.state == EngineState::Running));
+    }
+
+    /// An expendable stage has no reserve to protect; an empty tank still
+    /// depletes its engines terminally.
+    #[test]
+    fn expendable_empty_stage_still_depletes() {
+        let mut propulsion = recoverable_propulsion();
+        propulsion.vehicle.stages[0].recovery_propellant_reserve_kg = None;
+        propulsion.propellant_remaining_kg[0] = 0.0;
+
+        command_engine_lifecycle(&mut propulsion, true, None);
+        assert!(propulsion.vehicle.stages[0]
+            .engines
+            .iter()
+            .all(|engine| engine.state == EngineState::Depleted));
     }
 }

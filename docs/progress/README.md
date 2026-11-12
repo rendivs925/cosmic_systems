@@ -208,8 +208,8 @@ than a defect on the current trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1245 passed, 2 ignored
-cargo test --no-default-features --lib   # 1193 passed, 2 ignored
+cargo test --features dem --lib          # 1247 passed, 2 ignored
+cargo test --no-default-features --lib   # 1195 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -232,8 +232,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,245 domain and adapter
-tests pass (1,193 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,247 domain and adapter
+tests pass (1,195 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.

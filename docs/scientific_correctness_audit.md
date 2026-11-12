@@ -415,6 +415,12 @@ conclusions must be re-flown before they are re-used:
   did not stabilise the higher-speed entry. A pre-landing 180° flip with a rate
   limit and a 15° ignition interlock still left the stage tumbling and the
   landing engine unlit.
+- After the fold, a three-engine burn from the descent interface (170 km to
+  40 km) lights and removes 846 m/s for 16 t, but the stage still re-accelerates
+  to 2.18 km/s and peaks near 950 kPa; the 25 t budget cannot both slow the
+  stage and leave a terminal reserve. A bare vertical-speed threshold chattered
+  at apogee and spent four ignitions in 0.3 s, so the burn needs a latch; the
+  latched experiment is recorded but not committed.
 
 The pre-fold lesson was that recovery energy could not be fixed by propellant
 allocation alone because the higher entry speed exceeded the entry-attitude
@@ -426,6 +432,20 @@ and trajectory-shaping problem: the stage still reaches the dense atmosphere at
 pressure, leaving either no propellant or no altitude for the terminal burn.
 The committed 15 t profile is retained until an entry-burn/lift-management law is
 implemented and flown. The experiment is not a committed code path.
+
+**Recovery engine lifecycle at the reserve floor (fixed 2026-11-12).** During
+ascent the active core stage deliberately withholds
+`recovery_propellant_reserve_kg` from the burnable inventory.
+`command_engine_lifecycle` tested only `has_burnable_propellant()` and therefore
+called `engine.deplete()` when the burnable tank reached zero, even though the
+stage still held its recovery reserve. The separated stage inherits that clone,
+so a 25 t recovery profile could not light its boostback or entry burn: the
+measured flight showed all nine engines `Depleted` with 24 t still in the tank.
+A recoverable stage now shuts its engines down (`Off`, restartable) at the
+reserve floor and depletes only when the tank is truly empty; an expendable
+stage is unchanged. Two tests pin the recoverable shutdown/restart and the
+expendable depletion. The committed 15 t profile is unchanged because its
+engines were already `Off` at separation; the 25 t profile can now ignite.
 
 **Verdict.** VERIFIED for nominal ascent and insertion: the allocation, failure,
 minimum-impulse, and propellant paths are unit- and system-tested and are
@@ -779,10 +799,10 @@ or GAP in the scope where it is untested or unflown.
 
 ## Validation
 
-The gate for this track is the project gate, run on the retrograde-aero-fold
-commit. It adds three domain tests (retrograde axial force, retrograde restoring
-force in both planes, and the unchanged prograde slope), so the floor rises to
-1,245 with `dem` and 1,193 without; the previous floor was 1,242 and 1,190.
+The gate for this track is the project gate, run on the recovery-lifecycle
+commit. It adds three aero-fold tests and two lifecycle tests, so the floor
+rises to 1,247 with `dem` and 1,195 without; the previous floor was 1,242 and
+1,190.
 
 | check | result |
 | --- | --- |
@@ -790,8 +810,8 @@ force in both planes, and the unchanged prograde slope), so the floor rises to
 | `cargo check --all-targets --features dem` | PASS |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused-import/dead-code warnings) |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
-| `cargo test --features dem --lib` | 1,245 passed, 0 failed, 2 ignored |
-| `cargo test --no-default-features --lib` | 1,193 passed, 0 failed, 2 ignored |
+| `cargo test --features dem --lib` | 1,247 passed, 0 failed, 2 ignored |
+| `cargo test --no-default-features --lib` | 1,195 passed, 0 failed, 2 ignored |
 | `openspec validate --all --strict` | 43 passed, 0 failed |
 | `cargo build --release --features dem` | PASS |
 | three-mode 15 s smoke after the change | `solar`, `craft`, `rocket` all exit 124, zero `ERROR` or panic matches |
