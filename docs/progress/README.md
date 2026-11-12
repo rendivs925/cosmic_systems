@@ -126,7 +126,7 @@ or a named measurement:
 | TM-04 near-ground tone | the local albedo map was 4× the overview; a control build isolates it (4.36 → 1.98) and the tint build measures 2.01 at 3 km against 2.03 at 40 km |
 | AT-01 single-scattering sky | one `SkyParams` authority; the 10/30/70/200/400 km sequence and the 200/400 km limb exercise it from sea level to vacuum |
 | AT-02 altitude transition and limb | 6° limb e-folding 8.30 km (200 km) and 8.54 km (400 km) in linear light over 24–32 km, within 7 % of 8 km; displayable top 35–38 km; horizon luminance monotonic 0.138 → 0.073 → 0.026 → floor |
-| TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload |
+| TD-02 site grading | one capture per predefined site, all flush and dry (`2026-11-05-td02-*-fixed`); pad anchors now come from the resident payload; the terrain cutout is centred on the pad's radial body-fixed direction rather than the slope-tilted surface normal, so the hole stays concentric with the hardstand on level and sloped sites |
 | TD-10 cache-independent terrain | erosion baked from the immutable global DEM; Starbase cold/warm/off 2.53/2.37/2.40/255 mean, Baikonur 2.96/3.16/3.06/255, all within repeat-run noise; `2026-11-05-td10-*` |
 | TD-03 imagery colour match | region/overview linear-luma ratio 3.87× → 1.16×; median before/after ratio 4.264/2.470/4.705 vs inverse gain 4.269/2.464/4.705 (0.2 %); outside unchanged; `2026-11-05-td03-albedo-40km-*` |
 | RD-02 streaming split | culling, LOD reconcile and upload burst timed separately; prelaunch p95 0.257 / 0.865 ms per frame, 40 km 0.171 / 0.597 ms; 347–352 meshes at 0.016–0.019 ms build and 0.188–0.192 ms submission each; `PERFORMANCE_BASELINES.md` |
@@ -208,8 +208,8 @@ than a defect on the current trajectory.
 cargo fmt --check
 cargo check --all-targets --features dem
 cargo clippy --all-targets --features dem -- -D warnings
-cargo test --features dem --lib          # 1252 passed, 2 ignored
-cargo test --no-default-features --lib   # 1200 passed, 2 ignored
+cargo test --features dem --lib          # 1253 passed, 2 ignored
+cargo test --no-default-features --lib   # 1201 passed, 2 ignored
 openspec validate --all --strict         # 43 passed
 ```
 
@@ -232,8 +232,8 @@ not a measured claim.
 
 ## Concise status report
 
-The simulator runs and its physics is regression-locked; 1,252 domain and adapter
-tests pass (1,200 without the `dem` feature) and OpenSpec is strict-clean. The
+The simulator runs and its physics is regression-locked; 1,253 domain and adapter
+tests pass (1,201 without the `dem` feature) and OpenSpec is strict-clean. The
 realism programme has verified all forty-five tasks, and the separate
 scientific-correctness track has closed its per-thruster RCS, source-identity and
 lateral-aerodynamics items with the residuals recorded.

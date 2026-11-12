@@ -407,12 +407,20 @@ fn spawn_procedural_launch_pad(
     // surface spans the opening and hides the trench. Registering the cutout
     // here keeps it tied to the facility that fills it, and a site with no
     // facility never loses its ground.
+    //
+    // The cap is centred on the facility's radial body-fixed direction, not on
+    // the sampled surface normal. A cutout is a spherical cap around a point on
+    // the body, while a normal tilted by the local slope moves that point by
+    // `slope_rad * radius` — kilometres on a hillside. The grade flattens the
+    // pad around the radial direction, so the hole must be concentric with the
+    // pad there and cannot drift away from it as the body rotates.
     let mut cutouts = TerrainMeshCutouts::default();
     if let Some(planet) = PlanetFactory::create_by_id(&anchor.planet_name) {
         let radius_m = planet.radius_km as f64 * 1_000.0;
-        if radius_m > 0.0 {
+        let cutout_direction = anchor.position_body_fixed_m.normalize_or_zero();
+        if radius_m > 0.0 && cutout_direction.length_squared() > 0.5 {
             cutouts.cover_once(
-                anchor.normal_body_fixed,
+                cutout_direction,
                 LAUNCH_HARDSTAND_CUTOUT_RADIUS_M / radius_m,
             );
         }
@@ -1169,6 +1177,52 @@ mod tests {
     };
     use bevy::camera::primitives::MeshAabb;
     use bevy::light::{NotShadowCaster, NotShadowReceiver};
+
+    #[test]
+    fn terrain_cutout_is_centred_on_the_pad_position_not_a_tilted_normal() {
+        // A cutout is a spherical cap around a point on the body. Centring it on
+        // the sampled surface normal moves it by `slope * radius` when the
+        // ground is not level — about 556 km for the 5-degree normal below — so
+        // the hole would no longer sit under the hardstand that fills it.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        let radial = DVec3::new(0.6, 0.8, 0.0).normalize();
+        let tilted_normal = (radial + DVec3::Z * 0.0875).normalize();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>| {
+                spawn_procedural_launch_pad(
+                    &mut commands,
+                    &mut meshes,
+                    &mut materials,
+                    LaunchPadPresentation {
+                        planet_name: CelestialBodyId::earth(),
+                        position_body_fixed_m: radial * 6_371_000.0,
+                        normal_body_fixed: tilted_normal,
+                        heading_body_fixed: DVec3::X,
+                    },
+                    70.0,
+                    3.7,
+                );
+            },
+        );
+        app.update();
+
+        let cutouts = app.world().resource::<TerrainMeshCutouts>().cutouts();
+        assert_eq!(cutouts.len(), 1);
+        assert!(
+            cutouts[0].contains(radial),
+            "the terrain hole must stay concentric with the pad"
+        );
+        assert!(
+            !cutouts[0].contains(tilted_normal),
+            "a slope-tilted normal must not displace the hole"
+        );
+    }
 
     #[test]
     fn autopilot_targets_the_geocentric_site_latitude() {

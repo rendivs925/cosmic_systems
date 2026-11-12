@@ -63,8 +63,8 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | c5c3db0 |
 | `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | c5c3db0 |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | c5c3db0 |
-| `cargo test --features dem --lib` | 1252 passed, 0 failed, 2 ignored | c5c3db0 |
-| `cargo test --no-default-features --lib` | 1200 passed, 0 failed, 2 ignored | c5c3db0 |
+| `cargo test --features dem --lib` | 1253 passed, 0 failed, 2 ignored | c5c3db0 |
+| `cargo test --no-default-features --lib` | 1201 passed, 0 failed, 2 ignored | c5c3db0 |
 | `openspec validate --all --strict` | 43 passed, 0 failed | c5c3db0 |
 | `cargo build --release --features dem` | PASS | c5c3db0 |
 | three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | c5c3db0 |
