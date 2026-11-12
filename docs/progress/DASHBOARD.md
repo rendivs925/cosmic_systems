@@ -59,16 +59,17 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 0e63601 |
-| `cargo check --all-targets --features dem` | PASS | 0e63601 |
-| `cargo check --no-default-features` | PASS (4 pre-existing unused/dead-code warnings) | 0e63601 |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 0e63601 |
-| `cargo test --features dem --lib` | 1262 passed, 0 failed, 2 ignored | 0e63601 |
-| `cargo test --no-default-features --lib` | 1210 passed, 0 failed, 2 ignored | 0e63601 |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 0e63601 |
-| `cargo build --release --features dem` | PASS | 0e63601 |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 0e63601 |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.15 m/s, one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short) | 0e63601 |
+| `cargo fmt --check` | PASS | 4da744c |
+| `cargo check --all-targets --features dem` | PASS | 4da744c |
+| `cargo check --no-default-features` | PASS (5 pre-existing unused/dead-code warnings) | 4da744c |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 4da744c |
+| `cargo test --features dem --lib` | 1262 passed, 0 failed, 2 ignored | 4da744c |
+| `cargo test --no-default-features --lib` | 1210 passed, 0 failed, 2 ignored | 4da744c |
+| `openspec validate --all --strict` | 43 passed, 0 failed | 4da744c |
+| `cargo build --release --features dem` | PASS | 4da744c |
+| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 4da744c |
+| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.15 m/s, one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short) | 4da744c |
+| downrange deck flight (25 t experiment) | entry burn 70→55 km (24,521→14,008 kg, 2,496→2,273 m/s); powered descent 4.994 km / 1,065 m/s; deck contact 242.35 m/s vertical, 25.13 m/s lateral, 134.1° tilt, 14,008 kg left; deck crash, not a landing | 4da744c |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
