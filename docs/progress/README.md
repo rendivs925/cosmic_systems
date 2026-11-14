@@ -57,6 +57,11 @@ off, glides beneath it (the deck sits 27.2 m above the local sea geoid) and hits
 the water at 8.67 m/s lateral. Gating the descent on alignment is the obvious fix
 and costs fuel, so it stays an open GAP.
 
+The alignment fix was also implemented and measured rather than assumed: gating
+descent on lateral closing time turns the 25 t lateral crash into a clean
+landing, but at 15 t it costs 200–400 kg and loses two of nine grid placements.
+It is recorded, not adopted; the committed law and landings are unchanged.
+
 The reserve question was measured rather than argued: a 25 t variant (temporary
 local asset edit, reverted) moves the entry track ~92 km downrange, so the
 committed deck never sees an ignition, and on its own track it reaches the deck at

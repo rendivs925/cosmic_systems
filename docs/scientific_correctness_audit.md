@@ -1024,6 +1024,39 @@ authority. That costs fuel, which is the currency this stage does not have much
 of, so it is a design decision rather than a free fix. It is recorded as an open
 GAP with a measured mechanism instead of being silently absorbed by tuning.
 
+## Alignment-gated descent: measured, not adopted — 2026-11-14
+
+**Experiment.** The obvious correction to the alignment defect above was
+implemented and flown: cap the descent rate by the time the lateral loop needs,
+so the vehicle hangs rather than gliding under its own deck. The cap uses only
+existing quantities — the 12° tilt envelope gives lateral authority
+`g·tan(12°) ≈ 2.08 m/s²`, then `time = |v_lat|/a + √(2·|error|/a)` and
+`rate ≤ altitude/time`.
+
+It works, and it costs too much:
+
+| measured | current law | alignment-gated |
+| --- | ---: | ---: |
+| 15 t grid landings (25 placements) | 9 | 7 |
+| 15 t landing margins | 127–670 kg | 58–342 kg |
+| 15 t placements lost | — | (0, −50) and (−50, −50) |
+| 25 t on its own track | crash, 8.67 m/s lateral | **landed**, 1.216 m/s vertical, 1.207 m/s lateral, 0.445° tilt, 2,420.22 kg left |
+
+The gate turns the heavy-vehicle lateral failure into a clean landing, but at the
+committed 15 t configuration it spends 200–400 kg of the margin that makes the
+current window work, and two previously successful placements now run dry. Hanging
+is expensive: at ~28 t a hover burn costs on the order of 100 kg/s.
+
+**Decision: not adopted.** The committed law is unchanged and the three verified
+landings reproduce exactly (625.552795, 267.464508, 455.929352 kg). Recording the
+measurement keeps the trade explicit and reversible: if the reserve or entry
+trajectory ever change so that arrival error grows, this is the mechanism to
+revisit first, and the numbers above say what it will cost.
+
+This is a control-design trade, not a bug fix: the current law converts the deck's
+27 m freeboard above the local sea geoid into lateral working room, and the gate
+refuses to use it.
+
 ## Reserve trade measured — 2026-11-14
 
 **Experiment; the committed configuration is unchanged.** The open reserve
