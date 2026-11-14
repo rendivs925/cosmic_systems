@@ -27,6 +27,11 @@ and a measurement path that captures frames without a swapchain.
 
 ## What is currently being built?
 
+The recovery record now opens with **Recovery status — current** in
+`docs/scientific_correctness_audit.md`: one table of what is verified and one of
+what is open, with measured mechanisms. The dated sections below it are the
+evidence trail, not the summary.
+
 **Three 15 t full-flight deck landings are VERIFIED.** Three near-track deck
 placements land, each flown twice with identical recovery summaries: **1.328–1.338
 m/s vertical, 0.634–2.029 m/s lateral, 0.37–0.86° tilt**, with 267–626 kg of fuel

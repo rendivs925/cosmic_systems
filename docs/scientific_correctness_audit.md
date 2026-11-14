@@ -828,73 +828,91 @@ or GAP in the scope where it is untested or unflown.
    are the current evidence path; this is a presentation/capture limitation, not
    a simulation result. It must not be cited as visual verification of anything
    else.
-4. **RCS fidelity and recovery.** The representative station/tank model and the
-   booster-recovery case are the SC-04 residuals above. The committed profile now
-   enters engines-first under grid-fin control (α ≈ 179.7°, body rate below
-   0.5 rad/s through the dynamic-pressure rise), but it does not land: boostback
-   consumes the 15 t reserve, the stage is still 710.88 km short, and the impact
-   at T+501.078 s is a crash at 652.94 m/s. A 25 t reserve improves the crash to
-   549.01 km short and 305.62 m/s, but still does not land; 40 t breaks the
-   ascent. The 2026-11-12 follow-up, using the center engine and
-   `EngineSelection` plumbing, flew two variants before the aero fold:
-   - **25 t RTLS.** Insertion is preserved (200.526 × 199.353 km). The stage
-     reaches powered descent with about 4.2 t left, but crashes with 195.85 m/s
-     vertical, 222.57 m/s lateral and 39.05° tilt, 520.54 km short.
-   - **Downrange deck.** No boostback; a three-engine entry burn from 60 to 25 km
-     consumes 25.4 → 5.07 t and slows 2537 → 1890 m/s, then the stage crashes
-     158–622 km from the deck.
+4. **Recovery is verified only for a narrow, measured window.** Three deck
+   placements land, each flown twice with identical recovery summaries
+   (1.328–1.338 m/s vertical, 0.634–2.029 m/s lateral, 0.372–0.864° tilt,
+   267–626 kg left). A 5 × 5 placement grid brackets the capture window at about
+   50 m up-track by 50 m cross-track with 127–670 kg of margin, and every
+   placement beyond it exhausts propellant. The committed reserve stays 15 t: a
+   25 t variant moves the entry track ~92 km downrange and still fails, on lateral
+   speed rather than fuel. The deck is a mission input on the natural ballistic
+   track; the vehicle commands no lift during entry, so it cannot be steered
+   laterally to a deck placed far off that track. Entry energy, the SC-01
+   high-Mach thrust correlation, and the undeclared-corridor problem below are the
+   upstream limits. See **Deck touchdown verification — 2026-11-14** and
+   **Measured capture envelope**.
 
-   Re-flown after the fold, the downrange entry holds retrograde (α ≈ 180°,
-   body rate ≈ 0) but still reaches 2.2 km/s at 15 km and peaks near 900 kPa
-   dynamic pressure; the three-engine entry burn is efficient once aligned but
-   the 25 t budget cannot both slow the stage and leave a terminal reserve. The
-   binding constraint is entry energy and flight-path shaping, not propellant
-   mass, engine layout, or fin authority. The center-engine correction, subset
-   plumbing, and aero fold are committed; the experimental burn profiles are
-   not. Recovery energy sequencing remains IMPLEMENTED-tested, not VERIFIED
-   hardware or flight.
+5. **Water is a surface, not a fluid.** A water contact now resolves at the
+   sea-level geoid rather than the seabed, and is always a crash with a splashdown
+   event — a booster cannot land on water. There is no splashdown hydrodynamics,
+   buoyancy, or sinking model, so "splashdown" means a surface arrest. See
+   **Water-surface impact — 2026-11-14**.
 
-5. **Water impact.** A crash over water resolves against the sea-floor terrain
-   height, not the sea surface. The measured recovery finishes on the Gulf sea
-   floor at about −3.4 km terrain height. There is no water-impact, surface
-   splashdown, buoyancy, or sinking model; a crash over water is not a water
-   landing.
+6. **The booster entry exceeds the corridor it declares.** `DescentGuidanceConfig`
+   states 4 g and 50 kPa; the flown entry peaks at 11.51 g and 284.9 kPa, and the
+   corridor law is never entered by the downrange `EntryDescent` lane. Heat flux is
+   inside its limit. This is a reporting and modelling gap, not a tuned number.
+   See **Entry energy is the upstream limit — 2026-11-14**.
 
 ## Next steps, in order of physical impact
 
-1. **Recovery entry-energy and flight-path shaping.** The 2026-11-12 aero fold
-   removed the spurious retrograde lateral force, and the booster now holds
-   engines-first (`α ≈ 179.7°`, body rate `≈ 0`) through the dynamic-pressure
-   rise. It still does not land: with 25 t it reaches the dense atmosphere at
-   2.2 km/s on a −30° to −40° path and peaks near 900 kPa, so the three-engine
-   entry burn either stops at the landing reserve or leaves no terminal altitude.
-   The next step is an entry-lift/flight-path law (bank/AoA modulation) plus a
-   deliberate entry-burn/landing split, and a downrange recovery zone sized to
-   the actual ballistic range. The center-engine layout and aero fold are
-   committed; the three deterministic baselines are Electron-only and the
-   prograde aero path is preserved bit-for-bit, so no baseline was re-recorded.
-2. **Water impact.** Resolve a water contact at the sea surface and distinguish a
-   survivable splashdown from a crash, instead of always using the sea-floor
-   height. This affects any coastal or offshore landing.
-3. **RCS station/tank fidelity.** Replace the representative single-arm cluster
-   and final-stage tank draw with a catalogued layout. The current model remains a
-   documented simplification; the recovering stage now uses the same cluster path
-   as the primary.
-4. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
+1. **Replace the SC-01 correlation with a real retro-propulsion model.** It is the
+   upstream cause of the hot entry: the Earth configuration holds effectiveness at
+   exactly 0.5 above Mach 6.2, so the 70→55 km burn recovers far less velocity than
+   the real vehicle. Removing it would need a cited plume–freestream model, not a
+   coefficient chosen to improve the landing, so it stays a documented limit.
+2. **Entry lift / flight-path law.** Measured lateral authority at peak dynamic
+   pressure is ~16 m/s², enough to displace the impact point by kilometres, so this
+   is the only guidance-side way to widen the deck window. It cannot reduce peak
+   dynamic pressure, and it is a new flight law: it would re-place every deck and
+   require re-verification of the landings.
+3. **A booster-specific entry corridor.** Replace the borrowed 4 g / 50 kPa limits
+   with structural and thermal limits that describe this vehicle, so the corridor
+   check is meaningful for the ballistic lane.
+4. **RCS station/tank fidelity.** Replace the representative single-arm cluster and
+   final-stage tank draw with a catalogued layout. Reporting is now per vehicle
+   (primary 42.483 kg, recovering stage 15.887 kg).
+5. **SC-06 source promotion.** Requires a dated, immutable Falcon 9 document or an
    archived snapshot with a checksum; the current mutable vendor page cannot be
    pinned honestly.
-5. **Insertion deadband (optional, low impact).** The plane error is measured at
+6. **Insertion deadband (optional, low impact).** The plane error is measured at
    0.00135°, so a plane-change burn is not justified by this flight. The visible
-   insertion offset is the altitude deadband (+1.18 km apoapsis). Tightening it
-   is a control change with a baseline review; treat it as polish, not physics.
-   A plane-change law would still be needed for off-nominal or plane-corrected
-   insertion, but nothing in the current flight asks for one.
+   insertion offset is the altitude deadband (+1.18 km apoapsis).
+
+## Recovery status — current
+
+This is the one-paragraph answer; the dated sections below are the detailed
+record, in the order the work was done. Nothing below is deleted, but where an
+older section says a landing is not verified, this summary supersedes it.
+
+**Verified:** three 15 t deck landings, each flown twice in separate processes
+with identical recovery summaries — 1.338 / 2.029 m/s, 0.864°, 625.553 kg;
+1.330 / 0.634 m/s, 0.372°, 267.465 kg; 1.328 / 1.276 m/s, 0.578°, 455.929 kg
+(vertical / lateral, tilt, propellant remaining). The capture window is about
+50 m up-track by 50 m cross-track. Collision stops at the sea-level geoid. The
+primary ascent, insertion and RTLS crash reproduce on the committed
+configuration.
+
+**Implemented and tested, not flight-verified:** nothing outstanding on the deck
+path itself.
+
+**Open, with measured mechanisms:**
+
+| gap | mechanism | where |
+| --- | --- | --- |
+| Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2 | Entry energy |
+| Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
+| Capture window | fixed ballistic track, no commanded lift; lateral authority ~16 m/s² unused | Capture envelope |
+| Reserve trade | 25 t shifts the track ~92 km and still fails on lateral speed | Reserve trade |
+| Alignment vs fuel | gating descent on alignment lands the heavy case but costs 200–400 kg at 15 t | Alignment-gated descent |
+| Water model | sea-surface arrest only; no splashdown hydrodynamics | Water-surface impact |
+| RCS fidelity | representative cluster drawing from the final-stage tank | Recorded residuals |
+| SC-06 source | mutable vendor page cannot be pinned | SC-06 |
 
 ## Recovery deck and downrange entry profile
 
-**Historical status at the deck introduction: IMPLEMENTED and measured.** A
-specific 15 t deck landing is now VERIFIED below under **Deck touchdown
-verification — 2026-11-14**. The
+**Status at the deck introduction; superseded by
+[Recovery status — current](#recovery-status--current).** The
 recovery target can now be a body-fixed sea-surface deck supplied with
 `--recovery-deck <latitude>,<longitude>`. The deck is a simulation asset, not a
 presentation prop:
@@ -1412,8 +1430,9 @@ and kernel hashes are the same, and the committed regression artifacts pass.
 
 ## Earlier terminal recovery revalidation — 2026-11-14
 
-**Status: IMPLEMENTED and regression-tested; successful full-flight recovery is
-still a GAP.** This section supersedes the earlier deck-contact interpretation
+**Superseded by [Deck touchdown verification — 2026-11-14](#deck-touchdown-verification--2026-11-14);
+kept because it is the record of the contact-gate and ignition-latch fixes.**
+At that point successful full-flight recovery was still a GAP. This section supersedes the earlier deck-contact interpretation
 and records a deliberate re-flight of the RTLS reference, rather than assuming
 the changed terminal law preserves it.
 

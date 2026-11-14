@@ -147,6 +147,11 @@ fuel-limited deck crash figures above were re-measured. The `leo-insertion-safe`
 baseline was deliberately re-recorded because it had encoded an orbiting vehicle
 being damped as "resting"; see the audit's **Water-surface impact — 2026-11-14**.
 
+**Recovery status is summarised at the top of the recovery record** in
+`docs/scientific_correctness_audit.md` (**Recovery status — current**); the dated
+sections below there are the evidence trail. The dashboard rows below are the
+same measurements.
+
 **Recovery extension (2026-11-14):** three near-track 15 t full-flight deck
 landings are VERIFIED, each flown twice with identical recovery summaries, after
 fixing slew-aware gimbal allocation, lower-extent deck clearance, and an outer
