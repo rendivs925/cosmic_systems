@@ -198,11 +198,22 @@ pub const TERMINAL_DESCENT_RATE_GAIN_PER_S: f64 = 0.08;
 /// Minimum controlled descent rate before the final flare, m/s.
 pub const TERMINAL_MIN_DESCENT_RATE_MPS: f64 = 10.0;
 
-/// Position gain on the horizontal terminal error, 1/s².
-pub const TERMINAL_HORIZONTAL_POSITION_GAIN_PER_S2: f64 = 0.12;
+/// Outer lateral-loop natural frequency, rad/s. The measured terminal attitude
+/// response takes seconds under the physical gimbal limits; position guidance
+/// must be slower than that inner loop. This representative control setting
+/// trades aggressive late diversion for reduced tilt/velocity oscillation.
+const TERMINAL_HORIZONTAL_FREQUENCY_RADPS: f64 = 0.15;
+/// Overdamping accommodates the measured inner-loop lag rather than assuming
+/// instantaneous thrust-vector tracking in the critically damped point model.
+const TERMINAL_HORIZONTAL_DAMPING_RATIO: f64 = 1.5;
 
-/// Velocity damping gain on the horizontal terminal rate, 1/s.
-pub const TERMINAL_HORIZONTAL_VELOCITY_GAIN_PER_S: f64 = 0.9;
+/// Critically damped position gain (omega²), 1/s².
+pub const TERMINAL_HORIZONTAL_POSITION_GAIN_PER_S2: f64 =
+    TERMINAL_HORIZONTAL_FREQUENCY_RADPS * TERMINAL_HORIZONTAL_FREQUENCY_RADPS;
+
+/// Velocity gain (2 zeta omega), 1/s, before actuator lag.
+pub const TERMINAL_HORIZONTAL_VELOCITY_GAIN_PER_S: f64 =
+    2.0 * TERMINAL_HORIZONTAL_DAMPING_RATIO * TERMINAL_HORIZONTAL_FREQUENCY_RADPS;
 
 /// One-way landing sequence, retained with the vehicle's guidance state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -421,6 +432,60 @@ mod sequence_tests {
                 assert!(thrust.x > 0.0, "committed descent must not return to coast");
             }
         }
+    }
+
+    #[test]
+    fn terminal_horizontal_loop_stays_well_below_the_measured_attitude_rate() {
+        // Terminal traces show the booster slewing at roughly 0.3-0.5 rad/s
+        // while the outer loop commands a thrust-vector direction. An outer loop
+        // near that rate commands reversals faster than the airframe can follow:
+        // the measured failure had a 12° target while attitude error reached
+        // 24° and contact tilt 17°. Keep the outer loop far below it.
+        let outer_loop_bandwidth_radps = TERMINAL_HORIZONTAL_FREQUENCY_RADPS;
+        let observed_attitude_rate_radps = 0.5_f64;
+        assert!(
+            outer_loop_bandwidth_radps * 3.0 <= observed_attitude_rate_radps,
+            "outer lateral loop ({outer_loop_bandwidth_radps:.2} rad/s) must allow the \
+             attitude loop ({observed_attitude_rate_radps:.2} rad/s) to settle between commands"
+        );
+    }
+
+    #[test]
+    fn terminal_horizontal_loop_stays_inside_the_tilt_envelope_with_attitude_lag() {
+        // The outer position loop only sees a thrust-vector direction; the
+        // inner attitude loop needs time to slew the vehicle onto it. Model that
+        // lag explicitly and check the loop does not ring into the 12° limit.
+        const DT_S: f64 = 1.0 / 64.0;
+        const ATTITUDE_LAG_S: f64 = 0.35;
+        const GRAVITY_MPS2: f64 = 9.81;
+        let max_tilt_rad = 12.0_f64.to_radians();
+        let mut error_m = 16.0_f64;
+        let mut speed_mps = 0.0_f64;
+        let mut tilt_rad = 0.0_f64;
+        let mut peak_tilt_rad = 0.0_f64;
+        for _ in 0..(12.0 / DT_S) as usize {
+            let requested_accel = -TERMINAL_HORIZONTAL_POSITION_GAIN_PER_S2 * error_m
+                - TERMINAL_HORIZONTAL_VELOCITY_GAIN_PER_S * speed_mps;
+            let requested_tilt = (requested_accel / GRAVITY_MPS2).atan();
+            let follow = 1.0 - (-DT_S / ATTITUDE_LAG_S).exp();
+            tilt_rad += (requested_tilt.clamp(-max_tilt_rad, max_tilt_rad) - tilt_rad) * follow;
+            peak_tilt_rad = peak_tilt_rad.max(tilt_rad.abs());
+            speed_mps += GRAVITY_MPS2 * tilt_rad.sin() * DT_S;
+            error_m += speed_mps * DT_S;
+        }
+        assert!(
+            peak_tilt_rad <= max_tilt_rad + 1e-9,
+            "lateral loop must stay inside the tilt envelope, peaked at {:.2}°",
+            peak_tilt_rad.to_degrees()
+        );
+        assert!(
+            error_m.abs() < 16.0,
+            "lateral loop must reduce the initial error, ended at {error_m:.2} m"
+        );
+        assert!(
+            speed_mps.abs() < 5.0,
+            "lateral loop must not build divergence, ended at {speed_mps:.2} m/s"
+        );
     }
 
     #[test]

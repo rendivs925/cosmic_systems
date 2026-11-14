@@ -63,15 +63,15 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | this change |
 | `cargo check --no-default-features` | PASS (existing feature-disabled warnings) | this change |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | this change |
-| `cargo test --features dem` | library 1268 passed, 0 failed, 2 ignored; other targets pass | this change |
-| `cargo test --no-default-features` | library 1216 passed, 0 failed, 2 ignored | this change |
+| `cargo test --features dem` | library 1270 passed, 0 failed, 2 ignored; other targets pass | this change |
+| `cargo test --no-default-features` | library 1218 passed, 0 failed, 2 ignored | this change |
 | `openspec validate --all --strict` | 43 passed, 0 failed | this change |
 | `cargo build --release --features dem` | PASS | this change |
 | release three-mode smoke (15 s each) | PASS — all three exit 124, no ERROR/panic matches; startup only | this change |
 | default `cargo run` three-mode smoke (15 s each) | PASS — all three create mode windows, exit 124, no ERROR/panic matches | this change |
 | headless Falcon 9 / RTLS re-flight (5,400 s) | accepted 201.178314 × 199.975904 km, final primary mass 23,858.331 kg; recovery crash 186.154696 m/s vertical, 31.822342 m/s lateral, 8.726413° tilt, 706,186.117161 m miss, 0 kg recovery propellant; prior rounded impact figures confirmed; RCS summary lacks entity attribution | this change |
-| downrange deck landing (committed 15 t, 656.25 s) | **VERIFIED for deck 25.53904, −88.40209**, repeated with identical recovery summary: 1.599417 m/s vertical, 0.744938 m/s lateral, 10.097306° tilt, 667.612061 kg left, final `Landed` | this change |
-| nearby deck counterexample | deck 25.538992, −88.402547; deck crash 1.534015 m/s vertical, 2.904969 m/s lateral, 17.117436° tilt, 266.267609 kg left; placement robustness GAP | this change |
+| downrange deck landing (committed 15 t, 656.25 s) | **VERIFIED for three near-track decks**, each flown twice with identical summaries: 25.53904, −88.40209 → 1.338 m/s vertical, 2.029 m/s lateral, 0.864° tilt, 625.553 kg left; 25.538992, −88.402547 → 1.330 / 0.634 m/s, 0.372°, 267.465 kg; 25.53902, −88.40232 → 1.328 / 1.276 m/s, 0.578°, 455.929 kg; all final `Landed` | this change |
+| fuel-limited deck counterexample | deck 25.53897, −88.40277: exhausts propellant, sea-floor fall 168.434 m/s vertical, 34.346 m/s lateral, 11.490° tilt, 0 kg left; reserve/diversion margin GAP | this change |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -127,14 +127,16 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Recovery extension (2026-11-14):** one specified 15 t full-flight deck landing
-is now VERIFIED after fixing slew-aware gimbal allocation and lower-extent deck
-clearance. A nearby placement still crashes on tilt, so convergence robustness
-remains open. The earlier deck-crash claim used a gate that could capture a
-sea-floor impact and is superseded. See **Deck touchdown verification** in
-`docs/scientific_correctness_audit.md` for the repeat run, counterexample,
-provenance and reserve limits. An opt-in 1 Hz DEBUG trace now supports repeatable
-landing analysis; temporary environment-switched diagnostics remain removed.
+**Recovery extension (2026-11-14):** three near-track 15 t full-flight deck
+landings are VERIFIED, each flown twice with identical recovery summaries, after
+fixing slew-aware gimbal allocation, lower-extent deck clearance, and an outer
+lateral loop that had been faster than the attitude response. One further
+placement still exhausts propellant, so diversion/fuel margin remains the open
+limit. The earlier deck-crash claim used a gate that could capture a sea-floor
+impact and is superseded. See **Deck touchdown verification** in
+`docs/scientific_correctness_audit.md` for placements, provenance and reserve
+limits. An opt-in 1 Hz DEBUG trace supports repeatable landing analysis;
+environment-switched temporary diagnostics remain removed.
 The older scientific-extension narrative below describes historical measurements.
 
 **The realism programme is complete.** All 45 tasks are VERIFIED. The two former

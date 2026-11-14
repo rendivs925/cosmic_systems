@@ -27,21 +27,23 @@ and a measurement path that captures frames without a swapchain.
 
 ## What is currently being built?
 
-**One 15 t full-flight deck landing is VERIFIED.** The deck at terrain-radial
-25.53904, −88.40209 lands twice with identical recovery summaries: **1.599 m/s
-vertical, 0.745 m/s lateral, 10.097° tilt, 667.612 kg fuel left**, and stays Landed
-through T+656.25 s. Fixes align terminal gimbal allocation with slewed throttle
-and deck guidance clearance with the physical lower extent. One shared terminal
-law remains; physics coefficients and landing criteria were not tuned.
+**Three 15 t full-flight deck landings are VERIFIED.** Three near-track deck
+placements land, each flown twice with identical recovery summaries: **1.328–1.338
+m/s vertical, 0.634–2.029 m/s lateral, 0.37–0.86° tilt**, with 267–626 kg of fuel
+left, and stay Landed through T+656.25 s. Fixes align terminal gimbal allocation
+with slewed throttle, align deck guidance clearance with the physical lower
+extent, and slow the outer lateral loop to 0.15 rad/s so it no longer outruns the
+attitude response. One shared terminal law remains; physics coefficients and
+landing criteria were not tuned.
 
 The full gate passes: library counts
-are **1,268 with `dem` / 1,216 without**, two ignored each; strict Clippy,
+are **1,270 with `dem` / 1,218 without**, two ignored each; strict Clippy,
 OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
 still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
 
-The nearby deck at 25.538992, −88.402547 still crashes on deck at 17.117° tilt
-with 266.268 kg left. Placement robustness remains a GAP; the success is specific
-to the verified mission input, not a general recovery-envelope claim.
+At 25.53897, −88.40277 the stage still exhausts propellant before the deck and
+falls to the sea floor. Diversion against the 15 t reserve remains the binding
+limit; the verified envelope is bounded, not a general recovery-envelope claim.
 The 5,400 s RTLS re-flight confirms the prior 186.155 m/s / 706.186 km crash
 and 201.178314 × 199.975904 km primary orbit. Regression artifacts and tolerances
 are unchanged. Reserve stays 15 t; lateral convergence and fuel-margin robustness

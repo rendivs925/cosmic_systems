@@ -934,9 +934,10 @@ at the 15 t reserve; 25 t is an experiment and is not committed.
 
 ## Deck touchdown verification — 2026-11-14
 
-**VERIFIED for the specified headless scenario, not the general recovery
-envelope.** Two independent runs (debug trace enabled, then disabled) produce
-identical recovery summaries and remain `Landed` through T+656.25 s.
+**VERIFIED for three specified headless deck placements, not the general
+recovery envelope.** Each placement was flown twice, with independent processes
+and one run of each pair using the debug trace; every repeated recovery summary
+matches its pair to all printed digits and remains `Landed` through T+656.25 s.
 
 ### Defects corrected
 
@@ -955,6 +956,20 @@ identical recovery summaries and remain `Landed` through T+656.25 s.
    contact solver. A regression compares pad and deck flare commands at equal
    clearance, including a tilted vehicle. This fixes the geometric delay rather
    than retuning a flare constant or moving the contact plane.
+3. The terminal lateral loop ran at ~0.35 rad/s while the booster needs roughly
+   1 s to slew 10° of thrust vector. It therefore reversed its command faster
+   than the airframe could follow: the measured failure held a 12° target with a
+   24° attitude error and reached 17.1° tilt at contact. The position/velocity
+   gain pair is now a second-order loop at 0.15 rad/s with damping ratio 1.5
+   (0.0225 /s² and 0.45 /s), deliberately overdamped for the inner-loop lag.
+   Two pure tests guard this: one rejects an outer loop closer than 3× to the
+   observed ~0.5 rad/s attitude rate, and one integrates the loop with a 0.35 s
+   attitude lag and requires it to stay inside the 12° envelope. The first test
+   fails for the previous 0.12 / 0.9 pair, so it guards the actual regression.
+
+These are representative control settings, not validated Falcon 9 flight
+software. No thrust, drag, lift, mass, engine-limit or touchdown criterion was
+changed.
 
 An opt-in `rocket_landing` DEBUG trace samples authoritative clearance, lateral
 error/speed, actual/commanded tilt, attitude error, throttle and fuel once per
@@ -965,62 +980,74 @@ simulation second with an entity identifier. Enable with
 
 ```sh
 cargo build --release --features dem
-RUST_LOG=info target/release/headless_scenario --site starbase --recovery-deck 25.53904,-88.40209 --steps 42000 --scenario landing-deck-repeat
+RUST_LOG=info target/release/headless_scenario --site starbase \
+  --recovery-deck <lat>,<lon> --steps 42000 --scenario <id>
 ```
 
-| touchdown quantity | measured value |
-| --- | ---: |
-| vertical contact speed | 1.599416843 m/s |
-| lateral contact speed | 0.744937688 m/s |
-| tilt | 10.097305882° |
-| scorecard distance to target | 11.228018313 m |
-| remaining recovery propellant | 667.612061 kg |
-| final recovery mass | 26,257.843279 kg |
-| final state | `Landed`, ground contact `Landed`, angular speed 0 rad/s |
+All three placements below are `Landed` in two independent runs each, with
+recovery summaries identical to every printed digit. Nothing differs between
+the repeats, so the landing is deterministic for a fixed mission input.
+
+| deck (terrain-radial) | vertical | lateral | tilt | fuel left | centre offset |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 25.53904, −88.40209 | 1.338214 m/s | 2.029191 m/s | 0.863950° | 625.553 kg | 20.711 m |
+| 25.538992, −88.402547 | 1.329556 m/s | 0.633947 m/s | 0.371857° | 267.465 kg | 13.036 m |
+| 25.53902, −88.40232 | 1.328258 m/s | 1.276469 m/s | 0.577652° | 455.929 kg | 12.234 m |
+
+The third column of placements is the range over which this guidance converges
+without retuning. The middle placement is the one that crashed at 17.1° tilt
+before the bandwidth change; it now lands at 0.37° tilt with 267 kg left, which
+is the smallest measured margin and the closest to the fuel limit.
+
+`centre offset` is the scorecard distance from the deck centre to the vehicle
+**centre**, not the footprint test. Contact latches on the rotated lower extent,
+so a tilted vehicle can show a larger centre offset than its contact point; all
+three passed the unchanged 25 m bounded deck check.
 
 The existing deck extent, touchdown criteria and landing-gear energy-capacity
-check accept this contact. No thresholds were relaxed. The final inertial speed
+check accept these contacts. No thresholds were relaxed. The final inertial speed
 is ~419.19 m/s because the landed vehicle co-rotates with Earth; it is not a
 deck-relative landing speed. Guidance and contact continue to use physical state.
 
-Deck position is a mission input, not a fitted physics coefficient. Three nearby
-placements were tested after the throttle fix (25.53904/−88.40209,
-25.53902/−88.40232, 25.53897/−88.40277): the first crossed the deck but crashed,
-the other two missed. The clearance fix was then tested at that first placement.
-The previously recorded deck at 25.538992/−88.402547 was also re-flown with both
-fixes: it now crosses the deck with 266.267609 kg left, but **crashes** at
-1.534015419 m/s vertical, 2.904968550 m/s lateral and 17.117435784° tilt. This
-nearby counterexample limits the verification claim: lateral/attitude convergence
-and placement robustness remain GAPs. No universal landing capability is claimed.
+Deck position is a mission input, not a fitted physics coefficient. A fourth
+placement, 25.53897, −88.40277, still **crashes**: it exhausts propellant before
+the deck and falls to the sea floor at 168.43 m/s vertical, 34.35 m/s lateral and
+11.49° tilt with 0 kg left. That is a fuel-margin limit rather than a control
+limit — the stage was inside the footprint laterally but had nothing left to
+arrest the fall. The verified envelope is therefore bounded: convergence works
+for a deck near the natural track, and the committed 15 t reserve leaves little
+margin when the required diversion grows. No universal landing capability is
+claimed.
 
 The committed reserve remains 15 t. SC-01 retro-thrust, drag, lift, engine limits,
-landing criteria and vehicle configuration are unchanged. The successful run's
-~668 kg margin is measured for this scenario, not a certified operational reserve.
+landing criteria and vehicle configuration are unchanged. Measured margins of
+626 kg / 267 kg / 456 kg are for these scenarios, not a certified operational
+reserve, and the 267 kg case shows how thin the margin can get.
 Water-surface impact, entry-lift/flight-path fidelity, RCS station/tank fidelity,
 unattributed RCS summary and SC-06 immutable-source promotion remain open.
 
-RTLS was deliberately re-flown for 345,600 ticks with no deck: impact remains
-186.154696360 m/s vertical, 31.822342106 m/s lateral, 8.726413347° tilt,
-706,186.117161 m miss and zero fuel. Rounded impact figures and primary vehicle
-end state match the prior flight; final wreck motion differs slightly, so a
-bitwise-identical whole RTLS trajectory is not claimed. Primary final mass is
-23,858.331 kg and the accepted orbit remains 201.178314 × 199.975904 km.
-Vehicle, terrain and kernel hashes are the same as the preceding revalidation.
-Committed regression artifacts and tolerances remain unchanged and pass.
+RTLS was deliberately re-flown for 345,600 ticks with no deck, using the final
+gains: impact remains 186.154696360 m/s vertical, 31.822342106 m/s lateral,
+8.726413347° tilt, 706,186.117161 m miss, zero fuel and 25,592.125 kg, each
+identical to the preceding re-flight. Primary final mass is 23,858.331 kg and the
+accepted orbit remains 201.178314 × 199.975904 km. Vehicle, terrain and kernel
+hashes are the same. Committed regression artifacts and tolerances remain
+unchanged and pass.
 
 ### Validation for the touchdown correction
 
 - `cargo fmt --check`, both checks (all-targets with `dem`, no-default-features),
   and `cargo clippy --all-targets --features dem -- -D warnings`: PASS.
-- `cargo test --features dem`: **1,268 library tests passed**, two ignored.
-- `cargo test --no-default-features`: **1,216 library tests passed**, two ignored.
+- `cargo test --features dem`: **1,270 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,218 library tests passed**, two ignored.
 - `openspec validate --all --strict`: 43 items pass.
 - `cargo build --release --features dem`: PASS.
 - Release solar/craft/rocket smoke, 15 s each: exit 124, no ERROR/panic matches.
 - Debug `cargo run`, `cargo run -- craft`, `cargo run -- rocket`, 15 s each:
   each creates its mode window, exits 124 and has no ERROR/panic matches.
-- Headless successful deck repeat, nearby failed deck and RTLS: completed;
-  measurements above distinguish a landing from completed execution.
+- Headless: three verified deck landings, each run twice; one fuel-limited deck
+  crash; RTLS re-flight. Measurements above distinguish a landing from completed
+  execution.
 
 ## Earlier terminal recovery revalidation — 2026-11-14
 
@@ -1030,9 +1057,9 @@ and records a deliberate re-flight of the RTLS reference, rather than assuming
 the changed terminal law preserves it.
 
 - One terminal law serves both pad and deck recovery: 25% ignition margin,
-  10 m/s minimum descent before the 15 m flare, and lateral PD gains of
-  0.12 /s² and 0.9 /s. These are representative control settings, not validated
-  Falcon 9 flight software or evidence of landing capability.
+  10 m/s minimum descent before the 15 m flare. The lateral gains recorded here
+  (0.12 /s² and 0.9 /s) were later superseded by the 0.15 rad/s overdamped loop;
+  see **Deck touchdown verification — 2026-11-14**.
 - `LandingBurnSequence` is retained in `RocketAutopilot`, which replay already
   captures. Coast → retrograde → terminal is one-way. The previous boolean
   reset at 25 m/s: the first re-flight shut down again at ~65 m when speed rose
