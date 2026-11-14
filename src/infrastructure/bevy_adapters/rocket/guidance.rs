@@ -707,6 +707,7 @@ pub fn guidance_system(
                     rocket.dynamics.mass_kg,
                     max_thrust,
                     gravity_accel,
+                    &mut autopilot.landing_burn_sequence,
                 );
                 commands.target_attitude = roll_preserving_attitude_from_direction(
                     thrust_att * DVec3::Y,
@@ -749,6 +750,7 @@ pub fn guidance_system(
                     rocket.dynamics.mass_kg,
                     max_thrust,
                     gravity_accel,
+                    &mut autopilot.landing_burn_sequence,
                 );
                 commands.target_attitude = roll_preserving_attitude_from_direction(
                     thrust_att * DVec3::Y,
@@ -1652,12 +1654,17 @@ mod tests {
             "high speed keeps three engines"
         );
         assert_eq!(
-            landing_burn_engine_count(Some(&state), 80.0, 5_000.0),
+            landing_burn_engine_count(Some(&state), 30.0, 5_000.0),
             Some(3),
             "high altitude keeps three engines even when slow"
         );
         assert_eq!(
-            landing_burn_engine_count(Some(&state), 80.0, 120.0),
+            landing_burn_engine_count(Some(&state), 80.0, 200.0),
+            Some(3),
+            "a 80 m/s stage still needs the three-engine subset"
+        );
+        assert_eq!(
+            landing_burn_engine_count(Some(&state), 30.0, 80.0),
             Some(1),
             "only the final low, slow settle drops to the center engine"
         );

@@ -180,12 +180,45 @@ pub fn hover_slam_guidance(
     (thrust_dir * thrust_mag, attitude)
 }
 
+/// Speed below which the retrograde divert gives way to the vertical terminal
+/// law, m/s.
+pub const TERMINAL_DIVERT_SPEED_MPS: f64 = 25.0;
+
+/// Ignition margin on the high-speed stopping distance. The retro-burn law
+/// assumes instantaneous full thrust; the modelled throttle slew and engine
+/// start are not instantaneous, so the vehicle must commit before the
+/// idealized stopping point. This is a control margin, not extra thrust.
+pub const TERMINAL_IGNITION_MARGIN_RATIO: f64 = 0.25;
+
+/// Terminal descent-rate gain: `rate = -(altitude * gain)`, 1/s. A booster does
+/// not hover from 100 m; it descends at a controlled rate and flares in the
+/// final metres.
+pub const TERMINAL_DESCENT_RATE_GAIN_PER_S: f64 = 0.08;
+
+/// Minimum controlled descent rate before the final flare, m/s.
+pub const TERMINAL_MIN_DESCENT_RATE_MPS: f64 = 10.0;
+
+/// Position gain on the horizontal terminal error, 1/s².
+pub const TERMINAL_HORIZONTAL_POSITION_GAIN_PER_S2: f64 = 0.12;
+
+/// Velocity damping gain on the horizontal terminal rate, 1/s.
+pub const TERMINAL_HORIZONTAL_VELOCITY_GAIN_PER_S: f64 = 0.9;
+
+/// One-way landing sequence, retained with the vehicle's guidance state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LandingBurnSequence {
+    #[default]
+    Coast,
+    Retrograde,
+    Terminal,
+}
+
 /// Terrain-relative terminal guidance for a reusable vertical landing. The
 /// controller combines a stopping-distance brake with velocity damping and
 /// limits lateral acceleration to a strict thrust-vector tilt envelope. It
 /// never commands a downward-pointing main engine near the ground.
 ///
-/// Above [`DIVERT_SPEED_MPS`] the law is a three-dimensional retrograde
+/// Above [`TERMINAL_DIVERT_SPEED_MPS`] the law is a three-dimensional retrograde
 /// suicide burn: it coasts while the target is farther than the distance a
 /// maximum-thrust retro burn can null, then points the engine opposite the
 /// velocity vector. That is the only phase that can remove a large horizontal
@@ -194,6 +227,10 @@ pub fn hover_slam_guidance(
 /// placed at the ballistic impact point), not a pad the vehicle has already
 /// overflown. Below the divert speed the existing tilt-limited terminal law
 /// takes over for the final settle.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Physical inputs and persistent landing sequence."
+)]
 pub fn terminal_landing_guidance(
     position_m: DVec3,
     velocity_mps: DVec3,
@@ -202,12 +239,10 @@ pub fn terminal_landing_guidance(
     mass_kg: f64,
     max_thrust_n: f64,
     gravity_accel_mps2: f64,
+    sequence: &mut LandingBurnSequence,
 ) -> (DVec3, DQuat) {
     const MAX_TILT_RAD: f64 = 12.0_f64.to_radians();
     const LANDING_MARGIN_M: f64 = 15.0;
-    /// Speed below which the retrograde divert gives way to the vertical
-    /// terminal law, m/s.
-    const DIVERT_SPEED_MPS: f64 = 25.0;
     let up_dir = position_m.normalize_or_zero();
     let mass_kg = mass_kg.max(1.0);
     let max_accel_mps2 = (max_thrust_n / mass_kg).max(0.0);
@@ -222,7 +257,10 @@ pub fn terminal_landing_guidance(
     // thrust minus the gravity component that accelerates the vehicle along
     // that same direction. Coast until a maximum-thrust retro burn can just
     // null the velocity before reaching the target, then burn retrograde.
-    if speed_mps > DIVERT_SPEED_MPS {
+    if speed_mps <= TERMINAL_DIVERT_SPEED_MPS {
+        *sequence = LandingBurnSequence::Terminal;
+    }
+    if *sequence != LandingBurnSequence::Terminal {
         let velocity_unit = velocity_mps / speed_mps;
         let gravity_along_velocity_mps2 = (-up_dir * gravity_accel_mps2).dot(velocity_unit);
         let net_decel_mps2 = max_accel_mps2 - gravity_along_velocity_mps2;
@@ -233,7 +271,12 @@ pub fn terminal_landing_guidance(
         };
         let distance_to_target_m = (target_position_m - position_m).length();
         let thrust_direction = -velocity_unit;
-        if distance_to_target_m <= stopping_distance_m + LANDING_MARGIN_M {
+        let ignition_distance_m =
+            stopping_distance_m * (1.0 + TERMINAL_IGNITION_MARGIN_RATIO) + LANDING_MARGIN_M;
+        if distance_to_target_m <= ignition_distance_m {
+            *sequence = LandingBurnSequence::Retrograde;
+        }
+        if *sequence == LandingBurnSequence::Retrograde {
             return (
                 thrust_direction * max_thrust_n,
                 attitude_from_direction(thrust_direction),
@@ -256,7 +299,7 @@ pub fn terminal_landing_guidance(
     let target_descent_rate_mps = if braking {
         -1.5
     } else {
-        -(altitude_m * 0.04).clamp(3.0, 45.0)
+        -(altitude_m * TERMINAL_DESCENT_RATE_GAIN_PER_S).clamp(TERMINAL_MIN_DESCENT_RATE_MPS, 45.0)
     };
     let vertical_error_mps = target_descent_rate_mps - vertical_speed_mps;
     let requested_net_upward_accel_mps2 = if braking {
@@ -270,8 +313,9 @@ pub fn terminal_landing_guidance(
     // safe response to excess upward velocity, never turning the engine down.
     let vertical_thrust_accel_mps2 = (gravity_accel_mps2 + requested_net_upward_accel_mps2)
         .clamp(gravity_accel_mps2 * 0.25, max_accel_mps2);
-    let requested_horizontal_accel_mps2 =
-        horizontal_error_m * 0.0015 - horizontal_velocity_mps * 0.8;
+    let requested_horizontal_accel_mps2 = horizontal_error_m
+        * TERMINAL_HORIZONTAL_POSITION_GAIN_PER_S2
+        - horizontal_velocity_mps * TERMINAL_HORIZONTAL_VELOCITY_GAIN_PER_S;
     let max_horizontal_accel_mps2 = vertical_thrust_accel_mps2 * MAX_TILT_RAD.tan();
     let horizontal_accel_mps2 =
         requested_horizontal_accel_mps2.clamp_length_max(max_horizontal_accel_mps2);
@@ -343,4 +387,59 @@ pub fn powered_descent_guidance_convex(
 
     let attitude = DQuat::from_rotation_arc(DVec3::Y, thrust_dir);
     (thrust_dir * thrust_mag, attitude)
+}
+
+#[cfg(test)]
+mod sequence_tests {
+    use super::*;
+
+    #[test]
+    fn landing_burn_latch_holds_a_commit_and_hands_off_when_slow() {
+        let target = DVec3::X * 6_371_000.0;
+        let mut sequence = LandingBurnSequence::default();
+        for (altitude, speed, expected) in [
+            (5_000.0, 200.0, LandingBurnSequence::Coast),
+            (200.0, 200.0, LandingBurnSequence::Retrograde),
+            (200.0, 100.0, LandingBurnSequence::Retrograde),
+            (100.0, 20.0, LandingBurnSequence::Terminal),
+            (65.0, 26.0, LandingBurnSequence::Terminal),
+        ] {
+            let (thrust, _) = terminal_landing_guidance(
+                target + DVec3::X * altitude,
+                -DVec3::X * speed,
+                target,
+                altitude,
+                30_000.0,
+                2_500_000.0,
+                9.81,
+                &mut sequence,
+            );
+            assert_eq!(sequence, expected);
+            if expected == LandingBurnSequence::Coast {
+                assert_eq!(thrust, DVec3::ZERO);
+            } else {
+                assert!(thrust.x > 0.0, "committed descent must not return to coast");
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_speed_excursion_retains_tilt_envelope_and_thrust() {
+        let target = DVec3::X * 6_371_000.0;
+        let mut sequence = LandingBurnSequence::Terminal;
+        let (thrust, _) = terminal_landing_guidance(
+            target + DVec3::X * 65.0,
+            -DVec3::X * 10.0 + DVec3::Z * 30.0,
+            target,
+            65.0,
+            30_000.0,
+            845_000.0,
+            9.81,
+            &mut sequence,
+        );
+        assert_eq!(sequence, LandingBurnSequence::Terminal);
+        assert!(thrust.x > 0.0);
+        assert!(thrust.z < 0.0);
+        assert!(thrust.angle_between(DVec3::X) <= 12.0_f64.to_radians() + 1e-12);
+    }
 }

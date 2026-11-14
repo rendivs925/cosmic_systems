@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-11. Last code checkpoint: `6a7d4e0`.
+Snapshot: 2026-11-14. Recovery checkpoint: this change, based on `a41bf5d`.
 
 ---
 
@@ -27,7 +27,22 @@ and a measurement path that captures frames without a swapchain.
 
 ## What is currently being built?
 
-**Nothing is mid-edit.** The last checkpoint is committed, pushed and green.
+**Recovery remains IMPLEMENTED, not flight-verified.** One shared terminal law
+now has persistent coast → retrograde → terminal sequencing and bounded deck-plane
+contact. Temporary diagnostics are removed. The full gate passes: library counts
+are **1,266 with `dem` / 1,214 without**, two ignored each; strict Clippy,
+OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
+still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
+
+The 15 t deck flight still misses and crashes at the sea floor (166.696 m/s
+vertical, 41.601 m/s lateral, 15.450° tilt, 86.511 m scorecard miss, zero fuel).
+The 5,400 s RTLS re-flight confirms the prior 186.155 m/s / 706.186 km crash
+and 201.178314 × 199.975904 km primary orbit. Regression artifacts and tolerances
+are unchanged. Reserve stays 15 t; lateral convergence and landing fuel margin
+remain GAPs. RCS-summary entity attribution also needs correction before comparing
+its fuel numbers. See the audit's **Terminal recovery revalidation — 2026-11-14**.
+
+The following describes the earlier realism-programme checkpoints.
 The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06
 edge structure, RD-01 invalidation audit and VL-03 visual acceptance — are
 implemented, evidenced and archived. The two former blockers also closed on

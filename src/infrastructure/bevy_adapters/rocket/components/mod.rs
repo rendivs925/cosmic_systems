@@ -7,6 +7,7 @@ use crate::domain::entities::rocket::{
 use crate::domain::services::atmosphere::FlightConditions;
 use crate::domain::services::gravity::ForceModelReport;
 use crate::domain::services::grid_fin::{GridFinSpec, GRID_FIN_COUNT};
+use crate::domain::services::guidance::LandingBurnSequence;
 use crate::domain::services::landing_gear::{LandingGear, LegDeploymentState};
 use crate::domain::services::rcs::{RcsAllocation, RcsCluster};
 use crate::domain::services::rocket_dynamics::RocketDynamicsState;
@@ -648,6 +649,7 @@ pub struct RocketAutopilot {
     pub mode: crate::domain::services::guidance::AutopilotMode,
     pub time_since_liftoff_s: f64,
     pub target_landing_position_m: DVec3,
+    pub landing_burn_sequence: LandingBurnSequence,
     /// Latched ascent gravity-turn gate. Set once the vehicle clears the
     /// pad/tower (altitude and vertical-speed gate) and never cleared during
     /// the ascent, so a natural reduction in vertical speed cannot command a

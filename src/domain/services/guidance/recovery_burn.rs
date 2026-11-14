@@ -45,8 +45,12 @@ impl EntryBurnPlan {
         engines: 3,
         landing_engines: 1,
         landing_burn_engines: 3,
-        landing_burn_switch_speed_mps: 120.0,
-        landing_burn_switch_altitude_m: 250.0,
+        // Keep three engines until the single center engine can finish the
+        // remaining stop. One Merlin at full thrust nets about 20 m/s² on a
+        // ~28 t stage, so a 120 m/s handover needs ~360 m; 50 m/s needs ~62 m,
+        // which the final 100 m can supply.
+        landing_burn_switch_speed_mps: 50.0,
+        landing_burn_switch_altitude_m: 100.0,
         min_speed_mps: 1_000.0,
     };
 }

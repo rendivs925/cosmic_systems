@@ -291,14 +291,17 @@ pub fn resolve_drone_ship_deck_contact(
             continue;
         }
 
-        if deck_lateral_m
-            .x
-            .abs()
-            .max(deck_lateral_m.y.abs())
-            .max(deck_lateral_m.z.abs())
-            > ship.deck_half_extent_m
-            || deck_altitude_m > 0.0
-        {
+        if deck_lateral_m.length() > ship.deck_half_extent_m {
+            continue;
+        }
+        // Contact is a plane crossing, not "anywhere below the deck". Without a
+        // lower bound a stage that misses the deck falls through the sea surface
+        // and is later captured at the sea floor, several kilometres below the
+        // deck, as a deck touchdown. Accept only the band the body can cross in
+        // one fixed step.
+        let closing_speed_mps = relative_velocity_mps.dot(normal).abs();
+        let contact_band_m = (closing_speed_mps * dt).max(1.0);
+        if deck_altitude_m > 0.0 || deck_altitude_m < -contact_band_m {
             continue;
         }
 

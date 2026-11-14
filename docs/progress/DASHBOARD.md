@@ -1,7 +1,7 @@
 # Progress dashboard
 
-Snapshot date: 2026-11-12.
-Last code checkpoint: `0e63601` (2026-11-12).
+Snapshot date: 2026-11-14.
+Recovery checkpoint: this change, based on `a41bf5d`.
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -59,17 +59,18 @@ Ordered by visible impact, not by ease.
 
 | check | result | commit |
 | --- | --- | --- |
-| `cargo fmt --check` | PASS | 4da744c |
-| `cargo check --all-targets --features dem` | PASS | 4da744c |
-| `cargo check --no-default-features` | PASS (5 pre-existing unused/dead-code warnings) | 4da744c |
-| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | 4da744c |
-| `cargo test --features dem --lib` | 1262 passed, 0 failed, 2 ignored | 4da744c |
-| `cargo test --no-default-features --lib` | 1210 passed, 0 failed, 2 ignored | 4da744c |
-| `openspec validate --all --strict` | 43 passed, 0 failed | 4da744c |
-| `cargo build --release --features dem` | PASS | 4da744c |
-| three-mode smoke (15 s each) | PASS — all three exit 124, zero hard errors | 4da744c |
-| headless Falcon 9 (5,400 s) | ascent cut T+448.203 s; accepted 201.1783 x 199.9759 km; 42.483 kg RCS propellant; recovery stage takes its pad target from the launch site (the ascent snapshot is cleared at separation), RCS cluster, four grid fins and an all-nine engine selection: retrograde aero fold holds α ≈ 179.7° and body rate below 0.5 rad/s through the 870 kPa dynamic-pressure rise; blunt-base drag cuts the impact from 652.94 to 186.15 m/s, one crash at T+501.078 s (186.15 m/s vertical, 31.82 m/s lateral, 8.73° tilt, 706.19 km short) | 4da744c |
-| downrange deck flight (25 t experiment) | entry burn 70→55 km (24,521→14,008 kg, 2,496→2,273 m/s); powered descent 4.994 km / 1,065 m/s; deck contact 242.35 m/s vertical, 25.13 m/s lateral, 134.1° tilt, 14,008 kg left; deck crash, not a landing | 4da744c |
+| `cargo fmt --check` | PASS | this change |
+| `cargo check --all-targets --features dem` | PASS | this change |
+| `cargo check --no-default-features` | PASS (existing feature-disabled warnings) | this change |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS | this change |
+| `cargo test --features dem` | library 1266 passed, 0 failed, 2 ignored; other targets pass | this change |
+| `cargo test --no-default-features` | library 1214 passed, 0 failed, 2 ignored | this change |
+| `openspec validate --all --strict` | 43 passed, 0 failed | this change |
+| `cargo build --release --features dem` | PASS | this change |
+| release three-mode smoke (15 s each) | PASS — all three exit 124, no ERROR/panic matches; startup only | this change |
+| default `cargo run` three-mode smoke (15 s each) | PASS — all three create mode windows, exit 124, no ERROR/panic matches | this change |
+| headless Falcon 9 / RTLS re-flight (5,400 s) | accepted 201.178314 × 199.975904 km, final primary mass 23,858.331 kg; recovery crash 186.154696 m/s vertical, 31.822342 m/s lateral, 8.726413° tilt, 706,186.117161 m miss, 0 kg recovery propellant; prior rounded impact figures confirmed; RCS summary lacks entity attribution | this change |
+| downrange deck flight (committed 15 t, 656.25 s) | deck 25.538992, −88.402547; sea-floor crash 166.696370 m/s vertical, 41.601202 m/s lateral, 15.450160° tilt; scorecard miss 86.511053 m, 0 kg propellant; landing GAP | this change |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -124,6 +125,15 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 | requirement gaps | cloud lighting and aerial perspective still live only in the technical specification; visual atmosphere beyond `atmosphere` is thin |
 
 ## Next task
+
+**Recovery extension (2026-11-14):** persistent coast → retrograde → terminal
+sequencing and deck-plane contact rejection are regression-tested. Temporary
+diagnostics are removed. Full-flight landing remains a GAP: the committed 15 t
+deck case misses and depletes fuel. The earlier deck-crash claim used a gate
+that could capture a sea-floor impact and is superseded. See the current
+revalidation section of `docs/scientific_correctness_audit.md` for commands,
+provenance, reserve decision and the newly identified RCS-summary attribution GAP.
+The older scientific-extension narrative below describes historical measurements.
 
 **The realism programme is complete.** All 45 tasks are VERIFIED. The two former
 blockers closed on 2026-11-09: `VL-01` with three clean 25 s mode runs, and

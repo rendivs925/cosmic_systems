@@ -57,6 +57,7 @@ pub use entry::{
 pub use landing::{
     default_surface_landing_target, hover_slam_guidance, powered_descent_guidance,
     powered_descent_guidance_convex, suicide_burn_guidance, terminal_landing_guidance,
+    LandingBurnSequence, TERMINAL_DIVERT_SPEED_MPS,
 };
 pub use recovery_burn::{EntryBurnCommand, EntryBurnPlan, EntryBurnSequence};
 pub use transfer::{
@@ -963,6 +964,7 @@ mod tests {
             40_000.0,
             800_000.0,
             9.81,
+            &mut LandingBurnSequence::default(),
         );
 
         assert!(thrust.dot(up) > 0.0, "terminal thrust must remain upward");
@@ -991,6 +993,7 @@ mod tests {
             30_000.0,
             845_000.0,
             9.81,
+            &mut LandingBurnSequence::default(),
         );
         assert!(
             thrust.dot(velocity) < 0.0,
@@ -1011,11 +1014,65 @@ mod tests {
             30_000.0,
             845_000.0,
             9.81,
+            &mut LandingBurnSequence::default(),
         );
         assert_eq!(
             coast,
             DVec3::ZERO,
             "a target beyond the stopping distance must not burn propellant"
+        );
+    }
+
+    /// The ignition margin commits the burn before the idealized stopping
+    /// point. It is a control margin (throttle slew and engine start are not
+    /// instantaneous), not extra thrust: the returned force is still the real
+    /// maximum.
+    #[test]
+    fn ignition_margin_commits_before_the_idealized_stopping_point() {
+        let up = DVec3::X;
+        let position = up * 5_000.0;
+        let velocity = -up * 520.0 + DVec3::Z * 150.0;
+
+        // Inside the margin envelope, outside the idealized stopping point.
+        let speed = velocity.length();
+        let net_deceleration = 845_000.0 / 30_000.0 - (-up * 9.81).dot(velocity / speed);
+        let ideal_stopping_distance = speed * speed / (2.0 * net_deceleration);
+        let target = position + velocity.normalize() * ideal_stopping_distance * 1.1;
+        let (with_margin, _) = terminal_landing_guidance(
+            position,
+            velocity,
+            target,
+            5_000.0,
+            30_000.0,
+            845_000.0,
+            9.81,
+            &mut LandingBurnSequence::default(),
+        );
+        assert!(
+            with_margin.dot(velocity) < 0.0,
+            "the margin must commit a retrograde burn"
+        );
+        assert!(
+            (with_margin.length() - 845_000.0).abs() < 1e-6,
+            "the margin changes ignition timing, not delivered thrust"
+        );
+
+        // Beyond the margin envelope the law must still coast.
+        let too_far = position - up * 5_000.0 + DVec3::Z * 30_000.0;
+        let (coast, _) = terminal_landing_guidance(
+            position,
+            velocity,
+            too_far,
+            5_000.0,
+            30_000.0,
+            845_000.0,
+            9.81,
+            &mut LandingBurnSequence::default(),
+        );
+        assert_eq!(
+            coast,
+            DVec3::ZERO,
+            "a target beyond the ignition envelope must not burn propellant"
         );
     }
 }

@@ -1529,6 +1529,64 @@ mod recovery_pipeline_tests {
         );
     }
 
+    #[test]
+    fn deck_contact_rejects_deep_and_outside_plane_crossings() {
+        for offset in [-DVec3::X * 3_353.0, DVec3::new(-0.1, 20.0, 20.0)] {
+            let (mut app, deck_center_m) = recovery_app(4_000.0);
+            let up = deck_center_m.normalize();
+            let local_to_world = DQuat::from_rotation_arc(DVec3::X, up);
+            let ship = app
+                .world_mut()
+                .spawn(DroneShip {
+                    state: DomainDroneShip {
+                        position_m: deck_center_m,
+                        velocity_mps: DVec3::ZERO,
+                        external_accel_mps2: DVec3::ZERO,
+                        mass_kg: 4.0e6,
+                    },
+                    station_target_position_m: deck_center_m,
+                    station_keeper: StationKeeper {
+                        kp: 0.05,
+                        kd: 0.2,
+                        max_thrust_n: 2.0e6,
+                    },
+                    deck_half_extent_m: 25.0,
+                })
+                .id();
+            let stage = {
+                let world = app.world_mut();
+                world
+                    .query_filtered::<Entity, With<RocketPhysicsState>>()
+                    .single(world)
+                    .unwrap()
+            };
+            app.world_mut()
+                .get_mut::<RocketPhysicsState>(stage)
+                .unwrap()
+                .dynamics
+                .position_m = deck_center_m + up * 5.0 + local_to_world * offset;
+            app.world_mut()
+                .entity_mut(stage)
+                .insert(DroneShipLandingTarget {
+                    drone_ship: ship,
+                    prediction_horizon_s: 0.0,
+                    deck_contact: false,
+                });
+            app.update();
+            app.update();
+            assert!(
+                !app.world().get::<LandingScorecard>(stage).unwrap().recorded,
+                "a missed deck must not record a deck impact: {offset:?}"
+            );
+            assert!(
+                !app.world()
+                    .get::<DroneShipLandingTarget>(stage)
+                    .unwrap()
+                    .deck_contact
+            );
+        }
+    }
+
     fn droneship_outcome() -> (DVec3, DVec3, DVec3, LandingScorecard, bool, f64, bool) {
         let (mut app, deck_center_m) = recovery_app(20.0);
         let ship = app

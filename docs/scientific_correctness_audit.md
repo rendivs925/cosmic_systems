@@ -930,7 +930,105 @@ that energy. This is the same lift/crossflow gap recorded in residual 7 and the
 SC-03 residuals, not a tuning problem. The committed vehicle configuration stays
 at the 15 t reserve; 25 t is an experiment and is not committed.
 
-## Validation
+## Terminal recovery revalidation — 2026-11-14
+
+**Status: IMPLEMENTED and regression-tested; successful full-flight recovery is
+still a GAP.** This section supersedes the earlier deck-contact interpretation
+and records a deliberate re-flight of the RTLS reference, rather than assuming
+the changed terminal law preserves it.
+
+- One terminal law serves both pad and deck recovery: 25% ignition margin,
+  10 m/s minimum descent before the 15 m flare, and lateral PD gains of
+  0.12 /s² and 0.9 /s. These are representative control settings, not validated
+  Falcon 9 flight software or evidence of landing capability.
+- `LandingBurnSequence` is retained in `RocketAutopilot`, which replay already
+  captures. Coast → retrograde → terminal is one-way. The previous boolean
+  reset at 25 m/s: the first re-flight shut down again at ~65 m when speed rose
+  above that threshold and crashed with 1,064.40 kg still aboard. The sequence
+  now holds ignition and prevents terminal descent from returning to coast.
+  It applies to pad recovery too, without requiring `EntryBurnState` or RCS.
+- Three landing engines remain selected until both speed ≤50 m/s and altitude
+  ≤100 m; the center engine then owns the low, slow settle.
+- Deck contact requires lateral distance within 25 m and contact-point altitude
+  in the fixed-step closing band below the plane. Previously a missed deck
+  could capture a sea-floor impact ~3.35 km below it. The earlier 25 t “deck
+  crash” is therefore historical output from an invalid contact gate, not
+  evidence that the stage crossed the deck. The radial lateral check uses a
+  circular footprint inscribed in the deck, conservatively excluding corners.
+- Temporary recovery, entry, landing and plane-crossing diagnostics and their
+  plugin registration have been removed.
+
+### Reproducible final flights
+
+Built with `cargo build --release --features dem`; both commands exited 0:
+
+```sh
+RUST_LOG=info target/release/headless_scenario --site starbase --recovery-deck 25.538992,-88.402547 --steps 42000 --scenario recovery-deck-final
+RUST_LOG=info target/release/headless_scenario --site starbase --steps 345600 --scenario recovery-rtls-final
+```
+
+| measured output | deck, 656.25 s | RTLS, 5,400 s |
+| --- | ---: | ---: |
+| outcome | sea-floor crash; deck missed | crash |
+| contact vertical speed | 166.696370 m/s | 186.154696 m/s |
+| contact lateral speed | 41.601202 m/s | 31.822342 m/s |
+| contact tilt | 15.450160° | 8.726413° |
+| scorecard distance to target | 86.511053 m | 706,186.117161 m |
+| final recovery propellant | 0 kg | 0 kg |
+
+The scorecard distance is recorded at terrain contact; it is **not** deck-plane
+crossing error. The final deck output exactly matches the diagnostic sequence
+flight's recovery summary after diagnostic removal. No deck location sweep or
+physics coefficient tuning was used to manufacture a successful contact.
+
+RTLS revalidation confirms the previous rounded impact figures and the primary
+vehicle's accepted 201.178314 × 199.975904 km orbit and final mass 23,858.331 kg.
+The anticipated RTLS change did not appear in these measured outcomes: the
+reserve is already exhausted. All committed regression artifacts and tolerances
+remain unchanged and pass. The current `rcs_summary` prints 15.887217 kg, but
+inspection finds it selects the first `RocketRcs` entity without identifying
+the vehicle. It cannot substantiate the earlier 42.483 kg comparison; per-vehicle
+RCS reporting remains a telemetry GAP rather than a physics change in this work.
+
+Run provenance printed by the final RTLS flight:
+
+- vehicle SHA-256: `c245abf9615edf07948e82f9b464b15a4400f9399f20a7da88b367f2acb5a596`
+- terrain: `earth-csdem-sha256:2e30bb5498ce9ec8a12020cefde669208f0dba09d5a6b66861fa6e9ee11d33b6`
+- ephemeris: `naif-de440-egm2008-primary-v1:b3916ccb53d43a1b55a9ef8d50959ec65d696abfa2935f97973759031a0ea960`
+
+**Reserve decision:** retain the committed 15 t. The measured entry burn consumes
+about 10.25 t (14,502 → 4,247 kg, 70 →55 km). SC-01 supplies roughly half nominal
+retro-thrust at Mach ~9; this correlation was not tuned. The remaining landing
+reserve does not achieve recovery in this flight. Lateral convergence, entry
+energy/flight-path shaping and fuel margin remain GAPs; 25 t remains experimental.
+Water-surface impact, RCS station/tank fidelity and SC-06 immutable source
+promotion remain the previously recorded limitations.
+
+### Current validation
+
+Four additional library regressions cover ignition margin, persistent ignition
+and terminal handover, terminal speed excursions, and rejection of deep/outside
+deck contacts. Existing tests were retained; counts rise from 1,262/1,210 to
+**1,266/1,214**, with two ignored in each configuration.
+
+| check | result |
+| --- | --- |
+| `cargo fmt --check` | PASS |
+| `cargo check --all-targets --features dem` | PASS |
+| `cargo check --no-default-features` | PASS; existing feature-disabled warnings |
+| `cargo clippy --all-targets --features dem -- -D warnings` | PASS |
+| `cargo test --features dem` | PASS; library 1,266 passed, 2 ignored |
+| `cargo test --no-default-features` | PASS; library 1,214 passed, 2 ignored |
+| `openspec validate --all --strict` | PASS, 43 items |
+| `cargo build --release --features dem` | PASS |
+| release binary smoke, solar/craft/rocket, 15 s each | all exit 124; no ERROR/panic matches; startup evidence only |
+| `cargo run`, `cargo run -- craft`, `cargo run -- rocket`, 15 s each after debug build | all exit 124; each creates its mode window; no ERROR/panic matches |
+| headless deck and RTLS flights | completed; crashes recorded above, landing GAP |
+
+Tests emit logger-already-installed and missing-image-loader messages in minimal
+Bevy fixtures despite passing assertions. The three release smoke logs do not.
+
+## Historical validation — recovery-deck commit
 
 The gate for this track is the project gate, run on the recovery-deck commit. It
 adds eight tests (three entry-burn sequencing, two body-fixed deck, one deck
