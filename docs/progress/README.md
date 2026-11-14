@@ -56,6 +56,15 @@ A 5 × 5 deck grid brackets the committed-reserve capture window at about 50 m
 up-track and 50 m cross-track, with 127–670 kg of margin depending on direction;
 beyond it the stage exhausts propellant. The three verified decks are unchanged.
 
+Where that propellant goes was measured, not assumed. After staging the booster
+is commanded to flip engines-first, and the PID asks for up to **1.0e8 N·m** while
+the representative cluster can deliver **5.0e3 N·m per axis**. With no braking
+curve the flip overshoots and limit-cycles for about five minutes, drawing
+**504.8 kg** from the final-stage tank — 44.6 % of the 625.553 kg a landed stage
+has left. It ends when aerodynamic damping arrives at T+464 s. The trace is
+`RUST_LOG=info,rocket_rcs=debug`; no control law was changed and the landing
+figures are unchanged.
+
 Tracing the 25 t case found the mechanism: the terminal law descends without
 checking lateral alignment, so a large arrival error crosses the deck plane ~78 m
 off, glides beneath it (the deck sits 27.2 m above the local sea geoid) and hits

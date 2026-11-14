@@ -180,13 +180,23 @@ pub fn actuation_system(
         &mut TorqueAccumulator,
         &RocketAutopilot,
         &RocketMissionState,
+        Option<&RocketPhysicsState>,
         Option<&mut RocketRcs>,
         Option<&EngineSelection>,
     )>,
 ) {
     let dt = sim_time.fixed_timestep_f32();
-    for (entity, commands, mut propulsion, mut torque_accum, autopilot, mission, rcs, selection) in
-        rocket_query.iter_mut()
+    for (
+        entity,
+        commands,
+        mut propulsion,
+        mut torque_accum,
+        autopilot,
+        mission,
+        rocket,
+        rcs,
+        selection,
+    ) in rocket_query.iter_mut()
     {
         if matches!(
             *mission,
@@ -266,6 +276,33 @@ pub fn actuation_system(
                 rcs.pending_tank_draw_kg = (rcs.pending_tank_draw_kg - removed_kg).max(0.0);
             }
             rcs.last_allocation = Some(allocation);
+            // Opt-in observability for the thruster cluster. The allocation is
+            // the only place that knows both the commanded torque and what the
+            // hardware actually delivered, so the saturation and the cumulative
+            // tank draw are reported together. A limit cycle here spends main
+            // propellant that the landing burn later needs.
+            if sim_time.sim_time_s.rem_euclid(1.0) < f64::from(dt) {
+                bevy::log::debug!(
+                    target: "rocket_rcs",
+                    entity = ?entity,
+                    t_s = sim_time.sim_time_s,
+                    mission = ?mission,
+                    commanded_nm = commands.rcs_torque_cmd_body.length(),
+                    delivered_nm = allocation.torque_nm.length(),
+                    attitude_error_deg = rocket.map_or(f64::NAN, |rocket| {
+                        (rocket.dynamics.orientation * DVec3::Y)
+                            .angle_between(commands.target_attitude * DVec3::Y)
+                            .to_degrees()
+                    }),
+                    rate_radps = rocket.map_or(f64::NAN, |rocket| {
+                        rocket.dynamics.angular_velocity_radps.length()
+                    }),
+                    thrust_fraction = propulsion.throttle,
+                    saturated = allocation.saturated,
+                    cumulative_kg = rcs.propellant_used_kg,
+                    "RCS allocation sample"
+                );
+            }
             allocation.torque_nm
         } else {
             // Minimal harnesses without a thruster set keep the validated

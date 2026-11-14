@@ -18,7 +18,7 @@ least one test, not runtime-verified flight.
 | SC-01 | Retro-propulsion effectiveness is applied during a powered ascent | **DEFECT — fixed, IMPLEMENTED** |
 | SC-02 | Frame handedness across the ICRF / solar / IAU / terrain boundaries | **AUDITED — no defect; residual risk recorded** |
 | SC-03 | Aerodynamic axes, angle-of-attack sign, and center of pressure | **FIXED — body axes defined; coefficients named by axis; lateral slopes equalised; retrograde 180° normal-force fold; CP comment corrected** |
-| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery attitude grid-fin controlled, landing still unverified (energy)** |
+| SC-04 | Per-thruster RCS allocation | **VERIFIED for nominal ascent/insertion — representative thruster set, allocation, failure, minimum impulse, propellant draw; recovery coast is RCS-only and limit-cycles (504.8 kg), atmospheric attitude grid-fin controlled; landing verified separately** |
 | SC-05 | Closed-loop orbit insertion | **FIXED — apoapsis-targeted cutoff, one circularization burn, verified in flight; plane error measured at 0.0014°** |
 | SC-06 | Falcon 9 data coherence and provenance | **FIXED — public Block 5 masses; source identity explicitly unpinned with a recorded reason** |
 | SC-07 | WGS-84 geodetic vs geocentric latitude | **DEFECT — fixed for insertion targeting; one residual** |
@@ -359,7 +359,10 @@ vacuum insertion state) are unchanged. The baseline README records the reason.
    re-derives the rotating pad target every tick (tested: one hour of Earth
    rotation moves the target by more than 100 km). It also inherits a
    representative `RocketRcs` cluster, and it carries four grid fins that take
-   the atmospheric attitude command ahead of RCS. With the 15 t reserve the
+   the atmospheric attitude command ahead of RCS. In vacuum those fins have no
+   authority, and the post-separation flip limit-cycles: the deck flight spends
+   504.8 kg of main-tank propellant in the saturated loop before aerodynamic
+   damping ends it (see **Coast attitude limit cycle**). With the 15 t reserve the
    flight enters engines-first, holds under 0.5 rad/s through the dynamic-
    pressure rise, and crashes at T+594.828 s (342.66 m/s descent, 31.13° tilt,
    744.67 km short of the pad, 0 kg propellant). Raising the reserve to 25 t
@@ -903,6 +906,7 @@ path itself.
 | Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2 | Entry energy |
 | Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
 | Capture window | fixed ballistic track, no commanded lift; a naive lift trim moved the stage km off track (see Entry lift trim) | Capture envelope |
+| Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin | Coast attitude limit cycle |
 | Reserve trade | 25 t shifts the track ~92 km and still fails on lateral speed | Reserve trade |
 | Alignment vs fuel | gating descent on alignment lands the heavy case but costs 200–400 kg at 15 t | Alignment-gated descent |
 | Water model | sea-surface arrest only; no splashdown hydrodynamics | Water-surface impact |
@@ -1337,7 +1341,10 @@ Reading it honestly:
   distance.
 - Every failure at +25 m or beyond is propellant exhaustion (0 kg left), not a
   control limit. The stage reaches the deck plane with nothing left to arrest the
-  last metres and falls into the sea, which is now correctly a crash.
+  last metres and falls into the sea, which is now correctly a crash. Part of that
+  reserve never reaches the terminal burn: the coast attitude limit cycle spends
+  504.8 kg of it in RCS (see **Coast attitude limit cycle**), 44.6 % of the
+  625.553 kg a landed stage has left.
 - One earlier placement, 25.53897, −88.40277, is outside this grid and crashes
   the same way.
 
@@ -1468,6 +1475,67 @@ and kernel hashes are the same, and the committed regression artifacts pass.
 - Headless: three verified deck landings, each run twice; one fuel-limited deck
   crash; RTLS re-flight. Measurements above distinguish a landing from completed
   execution.
+
+## Coast attitude limit cycle spends the landing reserve — 2026-11-14
+
+**Measured, not new physics. No control law changed.** The separated booster is
+commanded to flip engines-first right after staging, and with the representative
+thruster cluster that flip never converges in vacuum. The attitude loop
+limit-cycles for about five minutes and draws **504.803 kg** from the final-stage
+main tank, of which **501.3 kg** is spent after separation:
+
+| T+ s | cumulative RCS draw | phase |
+| ---: | ---: | --- |
+| 145 | 1.306 kg | just after separation, flip begins |
+| 244 | 163.609 kg | first overshoot |
+| 344 | 327.550 kg | second |
+| 444 | 491.479 kg | fourth |
+| 464 | 502.641 kg | aerodynamic damping takes over |
+| 656 | 504.803 kg | touchdown |
+
+Reproduce with `RUST_LOG=info,rocket_rcs=debug` (added by this record; it samples
+the allocation once per simulated second and computes nothing).
+
+**Mechanism.** The PID commands a body angular acceleration and scales it by the
+current inertia, `I·(kp·e + ki·∫e − kd·ω)`, clamped at `output_clamp = 1.0e8 N·m`.
+With `kp = 10` and `I ≈ 5.2e6 kg·m²` the loop asks for `5.2e7 N·m` per radian of
+error, so the command reaches the 1.0e8 clamp at about 110° and exceeds the
+cluster's authority at any error above about 0.006°. The cluster's per-axis
+authority is **5.0e3 N·m** (a 2,500 N thruster on the fixed 2 m arm), so at the
+150–163° peaks the delivered torque is four orders of magnitude smaller than the
+command, and it is saturated for the whole manoeuvre.
+
+The stage's transverse inertia at separation is about **5.2e6 kg·m²** (40.6 t,
+41.2 m, 1.85 m radius), so the available angular acceleration is only
+**≈1e-3 rad/s²**. That gives a peak rate of 0.05–0.09 rad/s for a 163° flip, and
+the stopping distance at that rate is `ω²/2α ≈ 1.3–4 rad` — as large as the
+manoeuvre itself. The PD law has no braking curve, so it keeps commanding torque
+in the direction of the error until the error changes sign, then overshoots by
+roughly the full braking distance. The measured error starts at 163°, returns to
+13–22°, and swings back out to about 150° four times, at a rate peaking at
+**0.090 rad/s**, with the cluster saturated at 7,071 N·m (two axes at full
+authority) throughout. It only settles once dynamic pressure arrives at about
+T+464 s and the atmosphere damps the rate.
+
+**Why it matters.** The cluster draws from the final-stage tank (the documented
+SC-04 simplification), so this is propellant the landing burn cannot use. It is
+**44.6 %** of the propellant that would otherwise be touchdown margin
+(504.803 kg spent versus 625.553 kg left). Of the 15 t reserve, the entry burn
+uses 10.255 t (14,502 → 4,247 kg), the landing burns about 3.62 t, the coast
+limit cycle 0.505 t, and 0.626 t remains. The entry burn is still the dominant
+consumer, so this does not overturn the entry-energy conclusion — but the
+"propellant exhaustion" failures in the capture grid are not purely a landing-burn
+shortfall.
+
+**Not fixed here, deliberately.** The sound remedies are an authority-aware
+attitude command — a rate-limited reference or a time-optimal braking curve built
+from the delivered torque and the current inertia — or a representative cluster
+with realistic authority. Both are control-design changes, not gain tweaks:
+either one changes the attitude timeline through entry, which moves the ballistic
+track and therefore re-places every deck and re-opens the three verified
+landings. Iterating `kp`/`kd` until the oscillation disappears is exactly the
+gain-tuning this project forbids. The limit is recorded with its measured
+mechanism instead.
 
 ## Earlier terminal recovery revalidation — 2026-11-14
 
