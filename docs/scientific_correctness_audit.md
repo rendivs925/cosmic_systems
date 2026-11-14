@@ -1089,6 +1089,15 @@ Two things follow, and they are different in kind:
    recover that; it is the same correlation already recorded for SC-01 and
    deliberately not tuned.
 
+   Checked against the configuration rather than restated: Earth uses
+   `retro_propulsion_mach_threshold = 1.2` and `base_pressure_coefficient = 0.1`,
+   and `retro_propulsion_effectiveness` clamps the Mach *excess* at 5. The binding
+   clamp is therefore the excess, not the 0.1 effectiveness floor: everything
+   above Mach 6.2 sits at exactly **0.5**, which is why a Mach 8–9 entry burn
+   keeps half its thrust. At Mach 3 it is 0.82 and at a Mach 1.5 terminal burn
+   0.97, so the penalty is confined to the high-Mach entry burn. A domain test now
+   pins those values.
+
 It also shows the *shaping* gap in its real form: the vehicle holds exactly
 retrograde, so it flies the ballistic track with zero commanded lift. There is no
 cross-range control during entry — the deck must sit on that track, which is
@@ -1237,8 +1246,8 @@ That keeps both feature configurations testing the same geometry.
 
 - `cargo fmt --check`, both checks, `cargo clippy --all-targets --features dem --
   -D warnings`: PASS.
-- `cargo test --features dem`: **1,274 library tests passed**, two ignored.
-- `cargo test --no-default-features`: **1,221 library tests passed**, two ignored.
+- `cargo test --features dem`: **1,275 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,222 library tests passed**, two ignored.
 - `openspec validate --all --strict`: 43 items pass.
 - `cargo build --release --features dem`: PASS.
 - Three-mode release smoke, 15 s each: exit 124, no ERROR/panic matches.

@@ -416,6 +416,22 @@ mod tests {
         assert_eq!(retro_propulsion_effectiveness(0.9, 1.2, 0.1), 1.0);
     }
 
+    /// The Earth configuration is `threshold 1.2`, `coefficient 0.1`. The
+    /// documented "about half thrust at Mach 9" comes from the Mach-excess
+    /// clamp, not the 0.1 effectiveness floor: the excess saturates at 5, so
+    /// everything above Mach 6.2 sits at 0.5. Recording it keeps the audit
+    /// honest about which clamp is actually binding.
+    #[test]
+    fn earth_retro_effectiveness_floors_at_one_half_above_mach_six() {
+        assert!((retro_propulsion_effectiveness(9.0, 1.2, 0.1) - 0.5).abs() < 1e-12);
+        assert!((retro_propulsion_effectiveness(6.2, 1.2, 0.1) - 0.5).abs() < 1e-12);
+        assert!((retro_propulsion_effectiveness(20.0, 1.2, 0.1) - 0.5).abs() < 1e-12);
+        // Below the saturation Mach the correlation still varies.
+        assert!((retro_propulsion_effectiveness(3.0, 1.2, 0.1) - 0.82).abs() < 1e-12);
+        // A terminal burn at Mach 1.5 keeps nearly all of its thrust.
+        assert!(retro_propulsion_effectiveness(1.5, 1.2, 0.1) > 0.95);
+    }
+
     fn earth_config() -> ParachuteConfig {
         ParachuteConfig {
             drogue: CanopyConfig {
