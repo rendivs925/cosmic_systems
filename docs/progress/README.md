@@ -51,6 +51,12 @@ A 5 × 5 deck grid brackets the committed-reserve capture window at about 50 m
 up-track and 50 m cross-track, with 127–670 kg of margin depending on direction;
 beyond it the stage exhausts propellant. The three verified decks are unchanged.
 
+Tracing the 25 t case found the mechanism: the terminal law descends without
+checking lateral alignment, so a large arrival error crosses the deck plane ~78 m
+off, glides beneath it (the deck sits 27.2 m above the local sea geoid) and hits
+the water at 8.67 m/s lateral. Gating the descent on alignment is the obvious fix
+and costs fuel, so it stays an open GAP.
+
 The reserve question was measured rather than argued: a 25 t variant (temporary
 local asset edit, reverted) moves the entry track ~92 km downrange, so the
 committed deck never sees an ignition, and on its own track it reaches the deck at

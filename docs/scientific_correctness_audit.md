@@ -988,6 +988,42 @@ Tests: a domain test asserts a 5 rad/s contact crashes while the same speeds at
 above open Gulf water and asserts the verdict is `Crash` with
 `over_water = true`, never `Landed`.
 
+## Terminal descent ignores lateral alignment — 2026-11-14
+
+**DEFECT — identified, not yet fixed.** Tracing the 25 t case explained its
+8.67 m/s lateral arrival, and the cause is a guidance limitation rather than fuel:
+the terminal law commands a descent-rate profile **without checking lateral
+alignment**. It therefore crosses the deck plane even when it is tens of metres
+away, ends up below deck height, and spends the remaining seconds trying to
+converge sideways.
+
+Measured from the `rocket_landing` trace, 25 t stage on its own track:
+
+| t (s) | deck-relative altitude | vertical | lateral | lateral error |
+| ---: | ---: | ---: | ---: | ---: |
+| 533 | positive | −1.5 m/s | 2.8 m/s | 78.1 m |
+| 534 | 0 (crossed the plane) | −1.7 m/s | 2.8 m/s | 78.1 m |
+| 541 | 0 | −1.7 m/s | 1.1 m/s | 51.0 m |
+| 548 | 0 | −1.8 m/s | 1.2 m/s | 29.7 m |
+| contact | 0 | −1.63 m/s | **8.67 m/s** | ~25 m |
+
+The stage flew under the deck plane for roughly 14 s. It was not under water:
+the deck is spawned on the catalog mean-radius sphere, while the local EGM2008
+sea surface there is 27.2 m lower, so that gap is real air in the model. The
+landing law used it as extra working room, converged late, and the lateral speed
+at contact exceeded the 3 m/s limit.
+
+Why the three committed landings are unaffected: their arrival lateral error is
+inside what the remaining descent can null, so the same law converges before
+contact. The defect only shows when arrival error is large — exactly the 25 t
+case, and any future mass or trajectory change.
+
+The obvious correction is to gate the descent on lateral alignment: hold above
+the deck until the error is within reach of the remaining propellant and rate
+authority. That costs fuel, which is the currency this stage does not have much
+of, so it is a design decision rather than a free fix. It is recorded as an open
+GAP with a measured mechanism instead of being silently absorbed by tuning.
+
 ## Reserve trade measured — 2026-11-14
 
 **Experiment; the committed configuration is unchanged.** The open reserve
