@@ -1044,12 +1044,38 @@ Traced deck flight (committed 15 t, deck 25.53904, −88.40209):
 | 9.8 km | 3.49 | 232.2 kPa | 92.2 m/s² | 179.0° | 1,048 m/s |
 | 5.1 km | 1.58 | 94.3 kPa | 37.5 m/s² | 178.7° | 508 m/s |
 
-Peak dynamic pressure is **284.9 kPa at 13.75 km and Mach 5.26**, with an 11.5 g
+Peak dynamic pressure is **284.9 kPa at 13.75 km and Mach 5.26**, with an 11.51 g
 deceleration. A returning Falcon 9 first stage is subsonic by roughly 10 km; this
 one is still at Mach 3.5 there and does not reach Mach 1 until about 6 km. The
 stage also coasts to a 169.27 km apogee before the burn, then lights 3 engines at
 70.0 km on the descending leg (t≈448 s) and cuts at 55.4 km (t≈460 s), removing
 287 m/s of airspeed for 10.25 t of propellant.
+
+### The flight is outside its own declared corridor
+
+`DescentGuidanceConfig` declares a reentry corridor for Earth: 4 g, 50 kPa and
+1 MW/m². The measured booster entry against it:
+
+| quantity | declared limit | measured peak | where |
+| --- | ---: | ---: | --- |
+| dynamic pressure | 50 kPa | **284.9 kPa** (5.7×) | 13.75 km |
+| load factor | 4.0 g | **11.51 g** (2.9×) | 13.75 km |
+| heat flux | 1,000 kW/m² | 314.8 kW/m² (inside) | 20.3 km |
+
+This is a reporting gap as much as a trajectory one. The corridor is enforced by
+`AutopilotMode::Reentry`, which the downrange profile never enters: it flies
+`EntryDescent` and holds exactly retrograde. Even if it did enter, the existing
+law's response to a violation is a 90° bank to "increase drag", which on a
+cylinder in engines-first flow means presenting the side of the vehicle to a
+Mach 5 stream — not a credible manoeuvre.
+
+So the declared limits describe a lifting orbital reentry, not this ballistic
+booster lane, and nothing checks that lane against them. The flight exceeds two of
+the three limits and runs silently. Recording it is the honest outcome: enforcing
+them would require either a lift-modulated entry (which does not exist here) or a
+separate booster corridor that states what this vehicle can actually take — and
+that needs a real structural/thermal reference, not a number chosen to make the
+trace green.
 
 Two things follow, and they are different in kind:
 

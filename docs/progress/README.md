@@ -59,9 +59,12 @@ and costs fuel, so it stays an open GAP.
 
 Entry energy was measured too, since every landing limit traces back to it: peak
 dynamic pressure **284.9 kPa at 13.75 km and Mach 5.26** (real vehicle is subsonic
-by ~10 km), with alpha held at 173–179° throughout. Attitude is not the problem —
-the documented SC-01 retro-thrust correlation is, and the vehicle flies the
-ballistic track with no commanded lift.
+by ~10 km), with alpha held at 173–179° throughout. That is 5.7× the 50 kPa and
+2.9× the 4 g corridor `DescentGuidanceConfig` declares; the downrange
+`EntryDescent` lane never enters the `Reentry` corridor law, so the flight exceeds
+its own limits silently. Attitude is not the problem — the documented SC-01
+retro-thrust correlation is, and the vehicle flies the ballistic track with no
+commanded lift.
 
 The alignment fix was also implemented and measured rather than assumed: gating
 descent on lateral closing time turns the 25 t lateral crash into a clean

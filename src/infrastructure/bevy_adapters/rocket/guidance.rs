@@ -962,6 +962,17 @@ pub fn guidance_system(
                 alpha_deg = nose.angle_between(air).to_degrees(),
                 aero_accel_mps2 = aerodynamic_forces
                     .map_or(0.0, |aero| aero.force_body.length() / rocket.dynamics.mass_kg),
+                g_load = specific_force.map_or_else(
+                    || {
+                        aerodynamic_forces.map_or(0.0, |aero| {
+                            aero.force_body.length()
+                                / rocket.dynamics.mass_kg.max(1.0)
+                                / STANDARD_GRAVITY_MPS2
+                        })
+                    },
+                    |force| force.value.length() / STANDARD_GRAVITY_MPS2,
+                ),
+                heat_flux_w_m2 = thermal.map_or(0.0, |state| state.total_heat_flux_w_m2),
                 vertical_speed_mps = surface_relative_velocity_mps.dot(up_dir),
                 throttle = propulsion.throttle,
                 propellant_kg = available_propellant_kg(propulsion),
