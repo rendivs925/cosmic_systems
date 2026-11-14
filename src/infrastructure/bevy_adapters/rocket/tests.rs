@@ -1548,6 +1548,57 @@ mod recovery_pipeline_tests {
         );
     }
 
+    /// A water arrival is a splashdown and the stage is lost; it must never be
+    /// recorded as a landing just because the sampled contact point is slow.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn water_arrival_is_a_crash_not_a_landing() {
+        let (mut app, _pad) = recovery_app(0.0);
+        let stage = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<RocketPhysicsState>>()
+                .single(world)
+                .unwrap()
+        };
+        // Open Gulf water: the seabed is kilometres below the sea surface.
+        let (lat, lon) = (25.53904, -88.40209);
+        let up = radial_direction(lat, lon);
+        let sea_level_m =
+            crate::infrastructure::bevy_adapters::entity_components::PlanetTerrain::earth()
+                .source
+                .sea_level_height_m(lat, lon);
+        {
+            let world = app.world_mut();
+            let mut rocket = world.get_mut::<RocketPhysicsState>(stage).unwrap();
+            let mass_kg = rocket.dynamics.mass_kg;
+            let inertia = rocket.dynamics.inertia_body;
+            let com = rocket.dynamics.center_of_mass_m;
+            rocket.dynamics = RocketDynamicsState::new(
+                up * (EARTH_RADIUS_M + sea_level_m + 5.05),
+                -up * 1.0,
+                DQuat::from_rotation_arc(DVec3::Y, up),
+                mass_kg,
+                inertia,
+                com,
+            );
+            world.get_mut::<GroundRest>(stage).unwrap().active = false;
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+        let world = app.world();
+        let collision = world.get::<TerrainCollisionState>(stage).unwrap();
+        let mission = world.get::<RocketMissionState>(stage).unwrap();
+        assert!(collision.over_water, "the fixture must be over open water");
+        assert_eq!(
+            collision.ground_contact,
+            crate::domain::services::terrain_collision::GroundContact::Crash,
+            "a water arrival must be a crash, not a landing"
+        );
+        assert_eq!(*mission, RocketMissionState::Crashed);
+    }
+
     #[test]
     fn deck_contact_rejects_deep_and_outside_plane_crossings() {
         for offset in [-DVec3::X * 3_353.0, DVec3::new(-0.1, 20.0, 20.0)] {

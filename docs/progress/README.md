@@ -37,13 +37,19 @@ attitude response. One shared terminal law remains; physics coefficients and
 landing criteria were not tuned.
 
 The full gate passes: library counts
-are **1,272 with `dem` / 1,220 without**, two ignored each; strict Clippy,
+are **1,274 with `dem` / 1,221 without**, two ignored each; strict Clippy,
 OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
 still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
 
 At 25.53897, −88.40277 the stage still exhausts propellant before the deck and
 falls into the sea. Diversion against the 15 t reserve remains the binding
 limit; the verified envelope is bounded, not a general recovery-envelope claim.
+
+A water arrival is now always a crash, and touchdown acceptance bounds body
+angular rate at 0.5 rad/s so a tumbling wreck cannot be recorded as a landing.
+A 5 × 5 deck grid brackets the committed-reserve capture window at about 50 m
+up-track and 50 m cross-track, with 127–670 kg of margin depending on direction;
+beyond it the stage exhausts propellant. The three verified decks are unchanged.
 
 Collision now stops at the **sea surface** rather than the seabed, using the
 terrain source's `SurfaceClass` and EGM2008 datum instead of raw bathymetry. The

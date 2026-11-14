@@ -187,8 +187,8 @@ pub enum GroundContact {
 /// `v_t *= exp(-rate*dt)`, so it is deterministic and frame-rate independent.
 pub const REST_TANGENTIAL_DAMPING_PER_S: f64 = 12.0;
 
-/// Acceptance limits for a touchdown. All four must pass for a landing; any
-/// violated limit is a crash.
+/// Acceptance limits for a touchdown. Every limit must pass for a landing; any
+/// violation is a crash.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TouchdownCriteria {
     /// Maximum into-ground normal speed at contact (m/s).
@@ -200,6 +200,13 @@ pub struct TouchdownCriteria {
     /// Maximum tilt of the vehicle's longitudinal axis from the surface
     /// normal (degrees).
     pub max_tilt_deg: f64,
+    /// Maximum body angular rate at contact, rad/s.
+    ///
+    /// Contact-point speed alone is not enough to accept a landing: a tumbling
+    /// body can present a point that is momentarily almost stationary while the
+    /// vehicle is rotating several rad/s. A controlled touchdown is not
+    /// rotating, so a high rate is a crash regardless of the sampled point.
+    pub max_angular_rate_radps: f64,
 }
 
 impl Default for TouchdownCriteria {
@@ -211,6 +218,8 @@ impl Default for TouchdownCriteria {
             max_lateral_speed_mps: 3.0,
             max_slope_deg: 10.0,
             max_tilt_deg: 15.0,
+            // A booster settles within a few degrees per second at most.
+            max_angular_rate_radps: 0.5,
         }
     }
 }
@@ -241,18 +250,21 @@ pub fn decompose_velocity(velocity_mps: DVec3, surface_normal: DVec3) -> Velocit
 }
 
 /// Evaluate a touchdown against [`TouchdownCriteria`]. `descent_speed_mps`
-/// is the into-ground normal speed (>= 0).
+/// is the into-ground normal speed (>= 0); `angular_rate_radps` is the body
+/// rotation rate at contact.
 pub fn evaluate_touchdown(
     descent_speed_mps: f64,
     lateral_speed_mps: f64,
     slope_deg: f64,
     tilt_deg: f64,
+    angular_rate_radps: f64,
     criteria: &TouchdownCriteria,
 ) -> GroundContact {
     if descent_speed_mps > criteria.max_vertical_speed_mps
         || lateral_speed_mps > criteria.max_lateral_speed_mps
         || slope_deg > criteria.max_slope_deg
         || tilt_deg > criteria.max_tilt_deg
+        || angular_rate_radps > criteria.max_angular_rate_radps
     {
         return GroundContact::Crash;
     }
@@ -368,7 +380,7 @@ mod tests {
     fn valid_vertical_touchdown_is_a_landing() {
         let criteria = TouchdownCriteria::default();
         assert_eq!(
-            evaluate_touchdown(2.0, 1.0, 4.0, 5.0, &criteria),
+            evaluate_touchdown(2.0, 1.0, 4.0, 5.0, 0.0, &criteria),
             GroundContact::Landed
         );
     }
@@ -377,7 +389,7 @@ mod tests {
     fn excessive_lateral_speed_crashes() {
         let criteria = TouchdownCriteria::default();
         assert_eq!(
-            evaluate_touchdown(0.5, 30.0, 2.0, 3.0, &criteria),
+            evaluate_touchdown(0.5, 30.0, 2.0, 3.0, 0.0, &criteria),
             GroundContact::Crash
         );
     }
@@ -387,12 +399,12 @@ mod tests {
         let criteria = TouchdownCriteria::default();
         // Preserves the old hard-impact boundary.
         assert_eq!(
-            evaluate_touchdown(50.0, 0.5, 2.0, 3.0, &criteria),
+            evaluate_touchdown(50.0, 0.5, 2.0, 3.0, 0.0, &criteria),
             GroundContact::Crash
         );
         // The old 5–15 m/s "between" band was already a crash.
         assert_eq!(
-            evaluate_touchdown(10.0, 0.5, 2.0, 3.0, &criteria),
+            evaluate_touchdown(10.0, 0.5, 2.0, 3.0, 0.0, &criteria),
             GroundContact::Crash
         );
     }
@@ -401,7 +413,7 @@ mod tests {
     fn excessive_slope_crashes() {
         let criteria = TouchdownCriteria::default();
         assert_eq!(
-            evaluate_touchdown(1.0, 1.0, 45.0, 3.0, &criteria),
+            evaluate_touchdown(1.0, 1.0, 45.0, 3.0, 0.0, &criteria),
             GroundContact::Crash
         );
     }
@@ -410,7 +422,7 @@ mod tests {
     fn excessive_tilt_crashes() {
         let criteria = TouchdownCriteria::default();
         assert_eq!(
-            evaluate_touchdown(1.0, 1.0, 3.0, 60.0, &criteria),
+            evaluate_touchdown(1.0, 1.0, 3.0, 60.0, 0.0, &criteria),
             GroundContact::Crash
         );
     }
@@ -420,7 +432,22 @@ mod tests {
         let criteria = TouchdownCriteria::default();
         // Slope and tilt inside limits, speeds gentle: a legal hillside landing.
         assert_eq!(
-            evaluate_touchdown(2.0, 2.0, 8.0, 12.0, &criteria),
+            evaluate_touchdown(2.0, 2.0, 8.0, 12.0, 0.0, &criteria),
+            GroundContact::Landed
+        );
+    }
+
+    #[test]
+    fn a_tumbling_body_cannot_be_landed_by_a_slow_contact_point() {
+        let criteria = TouchdownCriteria::default();
+        // A point on a tumbling body can be almost stationary while the vehicle
+        // rotates several rad/s. Speeds look legal; the rotation must still crash.
+        assert_eq!(
+            evaluate_touchdown(0.15, 2.9, 5.0, 0.9, 5.0, &criteria),
+            GroundContact::Crash
+        );
+        assert_eq!(
+            evaluate_touchdown(0.15, 2.9, 5.0, 0.9, 0.0, &criteria),
             GroundContact::Landed
         );
     }

@@ -400,6 +400,7 @@ pub fn resolve_ground_contact(
             components.lateral_mps,
             sample.slope_deg,
             tilt_deg,
+            rocket.dynamics.angular_velocity_radps.length(),
             &criteria,
         );
         if verdict == GroundContact::Landed
@@ -418,6 +419,13 @@ pub fn resolve_ground_contact(
                 rocket.dynamics.mass_kg,
                 -components.normal_mps
             );
+            verdict = GroundContact::Crash;
+        }
+        if verdict == GroundContact::Landed && over_water {
+            // A booster cannot land on water. Arriving at the sea surface is a
+            // splashdown: the stage is lost, so the verdict is a crash. The
+            // touchdown limits still matter for the record, but they cannot turn
+            // a water arrival into a landing.
             verdict = GroundContact::Crash;
         }
         if penetrating {
@@ -498,26 +506,16 @@ pub fn resolve_ground_contact(
                     propulsion.throttle = 0.0;
                     propulsion.gimbal_pitch_rad = 0.0;
                     propulsion.gimbal_yaw_rad = 0.0;
-                    if collision.over_water {
-                        splashdown_writer.write(SplashdownDetectedEvent {
-                            rocket: rocket_entity,
-                            position_m: contact_position_m,
-                            touchdown_vertical_speed_mps: -components.normal_mps,
-                        });
-                        bevy::log::info!(
-                            "Splashdown detected at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s",
-                            -components.normal_mps
-                        );
-                    } else {
-                        touchdown_writer.write(TouchdownEvent {
-                            rocket: rocket_entity,
-                            position_m: contact_position_m,
-                            vertical_speed_mps: -components.normal_mps,
-                            lateral_speed_mps: components.lateral_mps,
-                            tilt_deg,
-                            slope_deg: sample.slope_deg,
-                        });
-                    }
+                    // A water arrival is a splashdown and is handled as a crash
+                    // below; only solid ground reaches a touchdown.
+                    touchdown_writer.write(TouchdownEvent {
+                        rocket: rocket_entity,
+                        position_m: contact_position_m,
+                        vertical_speed_mps: -components.normal_mps,
+                        lateral_speed_mps: components.lateral_mps,
+                        tilt_deg,
+                        slope_deg: sample.slope_deg,
+                    });
                 }
             }
             GroundContact::Crash => {
@@ -552,6 +550,17 @@ pub fn resolve_ground_contact(
                         vertical_speed_mps: -components.normal_mps,
                         tilt_deg,
                     });
+                    if collision.over_water {
+                        splashdown_writer.write(SplashdownDetectedEvent {
+                            rocket: rocket_entity,
+                            position_m: contact_position_m,
+                            touchdown_vertical_speed_mps: -components.normal_mps,
+                        });
+                        bevy::log::info!(
+                            "Splashdown at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s: a water arrival is a crash, not a landing",
+                            -components.normal_mps
+                        );
+                    }
                     record_scorecard(
                         scorecard,
                         -components.normal_mps,
@@ -636,6 +645,7 @@ mod tests {
             evaluate_touchdown(
                 -velocity.normal_mps,
                 velocity.lateral_mps,
+                0.0,
                 0.0,
                 0.0,
                 &criteria

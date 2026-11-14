@@ -956,6 +956,38 @@ rows carry the right role and their own draw.
 This is a reporting change only. No allocation, torque, mass flow or propellant
 accounting changed, and the flight's final state is identical.
 
+## Touchdown acceptance rejects tumbling bodies and water landings — 2026-11-14
+
+**DEFECT — fixed, IMPLEMENTED.** Two acceptance holes surfaced while measuring the
+capture envelope:
+
+1. **A tumbling body could be "landed".** `evaluate_touchdown` judged only the
+   sampled contact-point speeds, slope and tilt. A wreck rotating at ~5 rad/s can
+   present a point that is momentarily moving at 0.15 m/s while its centre falls
+   at ~19 m/s, which passed every limit and recorded a *Landed* splashdown after
+   the propellant had already run out. `TouchdownCriteria` now carries
+   `max_angular_rate_radps` (default 0.5 rad/s): a controlled touchdown is not
+   rotating, so a high body rate is a crash whatever the sampled point says.
+2. **Water arrival could be a landing.** A booster cannot land on water. A
+   water contact is now always a crash, and the splashdown event is emitted from
+   the crash path. The verdict and the scorecard stop calling a lost stage
+   "Landed (water)".
+
+Both call sites pass the authoritative body angular rate. Deck landings are
+unaffected because a settled deck contact is already below 0.5 rad/s; the three
+verified decks below are unchanged to every printed digit.
+
+A 5 × 5 deck grid then measured the capture envelope: roughly 50 m up-track and
+50 m cross-track, with 127–670 kg of margin depending on direction, and every
+out-of-envelope case exhausting propellant. The table is in **Deck touchdown
+verification — 2026-11-14**. This is the concrete form of the reserve limit: it
+is a placement tolerance, not a landing failure.
+
+Tests: a domain test asserts a 5 rad/s contact crashes while the same speeds at
+0 rad/s land, and a `dem`-gated pipeline test places the recovery stage just
+above open Gulf water and asserts the verdict is `Crash` with
+`over_water = true`, never `Landed`.
+
 ## Water-surface impact — 2026-11-14
 
 **DEFECT — fixed, IMPLEMENTED.** Collision used `TerrainSource::height_m` directly.
@@ -1020,13 +1052,49 @@ That keeps both feature configurations testing the same geometry.
 
 - `cargo fmt --check`, both checks, `cargo clippy --all-targets --features dem --
   -D warnings`: PASS.
-- `cargo test --features dem`: **1,272 library tests passed**, two ignored.
-- `cargo test --no-default-features`: **1,220 library tests passed**, two ignored.
+- `cargo test --features dem`: **1,274 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,221 library tests passed**, two ignored.
 - `openspec validate --all --strict`: 43 items pass.
 - `cargo build --release --features dem`: PASS.
 - Three-mode release smoke, 15 s each: exit 124, no ERROR/panic matches.
 - Headless: three deck landings (all `Landed`, identical to the pre-change
   figures), one out-of-fuel deck crash, and the RTLS re-flight above.
+
+### Measured capture envelope
+
+The three verified decks are not an isolated coincidence: a 5 × 5 grid of
+placements around 25.53904, −88.40209 (25 m spacing, 25 flights) gives a coherent
+envelope. `Δalong` is positive down-track; `Δcross` positive to the east.
+
+| Δalong (m) | Δcross −50 | −25 | 0 | +25 | +50 |
+| ---: | --- | --- | --- | --- | --- |
+| −50 | 262 kg | 568 kg | 670 kg | crash | crash |
+| −25 | 130 kg | 459 kg | 629 kg | crash | crash |
+| 0 | 127 kg | 455 kg | 626 kg | crash | crash |
+| +25 | crash | crash | crash | crash | crash |
+| +50 | crash | crash | crash | crash | crash |
+
+Reading it honestly:
+
+- The capture window is roughly **50 m up-track and 50 m cross-track**, not a
+  radius around a point, and it is strongly asymmetric. Every landing is at
+  Δalong ≤ 0 and Δcross ≤ 0.
+- The margin depends on direction, not just distance: 670 kg when the deck sits
+  50 m up-track, but only 127 kg when it sits 50 m to one side at the same
+  distance.
+- Every failure at +25 m or beyond is propellant exhaustion (0 kg left), not a
+  control limit. The stage reaches the deck plane with nothing left to arrest the
+  last metres and falls into the sea, which is now correctly a crash.
+- One earlier placement, 25.53897, −88.40277, is outside this grid and crashes
+  the same way.
+
+That makes the remaining limit concrete: with the committed 15 t reserve the
+stage can absorb about a 50 m deck-placement error in one favourable direction,
+and essentially none in the other. Widening it needs either more entry-burn
+reserve or less entry Δv loss (SC-01 / lift), not more terminal gain.
+
+The grid is a coarse sample: the true boundary lies between nodes, so these are
+bracketing measurements, not a fitted contour.
 
 Water is still not modelled as a fluid: there is no splashdown, buoyancy, or
 wetting. A water contact is a surface arrest and a crash verdict, which is the

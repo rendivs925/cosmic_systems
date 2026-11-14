@@ -323,6 +323,7 @@ pub fn resolve_drone_ship_deck_contact(
             components.lateral_mps,
             0.0,
             tilt_deg,
+            rocket.dynamics.angular_velocity_radps.length(),
             &criteria,
         );
         if verdict == GroundContact::Landed
