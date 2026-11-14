@@ -1024,6 +1024,53 @@ authority. That costs fuel, which is the currency this stage does not have much
 of, so it is a design decision rather than a free fix. It is recorded as an open
 GAP with a measured mechanism instead of being silently absorbed by tuning.
 
+## Entry energy is the upstream limit — 2026-11-14
+
+**Measured; no law changed.** Every remaining landing limit traces back to how
+fast the stage arrives, and that had never been sampled. An opt-in
+`rocket_entry` DEBUG trace now reports the shared atmosphere sample and the aero
+force already computed by physics, once per simulation second during
+`EntryDescent`/`Reentry`. Enable with `RUST_LOG=info,rocket_entry=debug`.
+
+Traced deck flight (committed 15 t, deck 25.53904, −88.40209):
+
+| altitude | Mach | dynamic pressure | aero deceleration | alpha | airspeed |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 60.5 km | 8.16 | 1.0 kPa | 0.3 m/s² | 173.6° | 2,563 m/s |
+| 40.1 km | 7.66 | 11.7 kPa | 4.6 m/s² | 176.1° | 2,430 m/s |
+| 29.4 km | 7.91 | 57.5 kPa | 22.7 m/s² | 177.5° | 2,382 m/s |
+| 20.3 km | 7.13 | 188.3 kPa | 74.5 m/s² | 178.7° | 2,105 m/s |
+| **13.75 km** | **5.26** | **284.9 kPa** | **112.9 m/s²** | 179.1° | **1,551 m/s** |
+| 9.8 km | 3.49 | 232.2 kPa | 92.2 m/s² | 179.0° | 1,048 m/s |
+| 5.1 km | 1.58 | 94.3 kPa | 37.5 m/s² | 178.7° | 508 m/s |
+
+Peak dynamic pressure is **284.9 kPa at 13.75 km and Mach 5.26**, with an 11.5 g
+deceleration. A returning Falcon 9 first stage is subsonic by roughly 10 km; this
+one is still at Mach 3.5 there and does not reach Mach 1 until about 6 km. The
+stage also coasts to a 169.27 km apogee before the burn, then lights 3 engines at
+70.0 km on the descending leg (t≈448 s) and cuts at 55.4 km (t≈460 s), removing
+287 m/s of airspeed for 10.25 t of propellant.
+
+Two things follow, and they are different in kind:
+
+1. **Attitude is not the problem.** Alpha holds 173–179° through the whole entry:
+   the stage stays engines-first, which is what the retrograde hold asks for. The
+   attitude loop is doing its job.
+2. **Energy is the problem, and it is a documented model limit.** The 70→55 km
+   burn is representative of the real profile, but the SC-01 retro-propulsion
+   correlation supplies roughly half nominal thrust at Mach 9, so the stage
+   removes far less velocity than a real entry burn would. Nothing in guidance can
+   recover that; it is the same correlation already recorded for SC-01 and
+   deliberately not tuned.
+
+It also shows the *shaping* gap in its real form: the vehicle holds exactly
+retrograde, so it flies the ballistic track with zero commanded lift. There is no
+cross-range control during entry — the deck must sit on that track, which is
+exactly the ~50 m window measured above. Using the existing lateral
+normal-force model to trim a few degrees of alpha is the only guidance-side way
+to widen it, and that is a new flight law rather than a defect fix, so it is not
+added here.
+
 ## Alignment-gated descent: measured, not adopted — 2026-11-14
 
 **Experiment.** The obvious correction to the alignment defect above was

@@ -57,6 +57,12 @@ off, glides beneath it (the deck sits 27.2 m above the local sea geoid) and hits
 the water at 8.67 m/s lateral. Gating the descent on alignment is the obvious fix
 and costs fuel, so it stays an open GAP.
 
+Entry energy was measured too, since every landing limit traces back to it: peak
+dynamic pressure **284.9 kPa at 13.75 km and Mach 5.26** (real vehicle is subsonic
+by ~10 km), with alpha held at 173–179° throughout. Attitude is not the problem —
+the documented SC-01 retro-thrust correlation is, and the vehicle flies the
+ballistic track with no commanded lift.
+
 The alignment fix was also implemented and measured rather than assumed: gating
 descent on lateral closing time turns the 25 t lateral crash into a clean
 landing, but at 15 t it costs 200–400 kg and loses two of nine grid placements.

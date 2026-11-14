@@ -940,6 +940,35 @@ pub fn guidance_system(
             );
         }
 
+        // Entry observability: the landing limits trace back to arrival energy,
+        // so the entry phase is sampled with the same 1 Hz, opt-in trace. It
+        // reports the shared atmosphere sample and the aero force the physics
+        // already computed; it computes nothing for the simulation.
+        if matches!(
+            autopilot.mode,
+            AutopilotMode::EntryDescent | AutopilotMode::Reentry
+        ) && sim_time.sim_time_s.rem_euclid(1.0) < dt
+        {
+            let nose = rocket.dynamics.orientation * DVec3::Y;
+            let air = conditions.atmosphere_relative_velocity_mps;
+            debug!(
+                target: "rocket_entry",
+                entity = ?access.entity,
+                t_s = sim_time.sim_time_s,
+                altitude_km = altitude_m / 1_000.0,
+                airspeed_mps = surface_relative_speed_mps,
+                mach = conditions.mach_number,
+                q_kpa = conditions.dynamic_pressure_pa / 1_000.0,
+                alpha_deg = nose.angle_between(air).to_degrees(),
+                aero_accel_mps2 = aerodynamic_forces
+                    .map_or(0.0, |aero| aero.force_body.length() / rocket.dynamics.mass_kg),
+                vertical_speed_mps = surface_relative_velocity_mps.dot(up_dir),
+                throttle = propulsion.throttle,
+                propellant_kg = available_propellant_kg(propulsion),
+                "entry sample"
+            );
+        }
+
         // Reentry-corridor mission state receives a bank-angle command.
         if *mission_state == RocketMissionState::ReentryCorridor
             && autopilot.mode == AutopilotMode::Off
