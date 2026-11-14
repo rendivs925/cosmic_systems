@@ -23,8 +23,8 @@ use crate::infrastructure::bevy_adapters::ephemeris::{
     update_ephemeris_snapshot, EphemerisAuthority, EphemerisPlugin, EphemerisSnapshot,
 };
 use crate::infrastructure::bevy_adapters::rocket::components::{
-    LandingScorecard, ParachuteState, RecoveringStage, RocketMissionState, RocketPhysicsState,
-    RocketPropulsion, RocketRcs, SpentStage, TerrainCollisionState,
+    LandingScorecard, ParachuteState, PrimaryVehicle, RecoveringStage, RocketMissionState,
+    RocketPhysicsState, RocketPropulsion, RocketRcs, SpentStage, TerrainCollisionState,
 };
 use crate::infrastructure::bevy_adapters::rocket::recovery::RecoveryDeckRequest;
 use crate::infrastructure::bevy_adapters::rocket::sets::RocketSet;
@@ -279,6 +279,27 @@ fn build_headless_app(scenario: &HeadlessScenario) -> Result<(App, SimulationRun
 }
 
 /// Execute a fresh isolated simulation context and retain its fixed-tick output.
+/// RCS propellant draw per vehicle entity, labelled by role.
+///
+/// The recovering booster remains in the normal rocket pipeline, so it carries
+/// its own `RocketRcs`. Reporting only the first match conflated the two
+/// vehicles and could not substantiate a per-vehicle fuel comparison.
+fn collect_rcs_summaries(world: &mut World) -> Vec<(Entity, &'static str, f64)> {
+    let mut primary_query = world.query_filtered::<(Entity, &RocketRcs), PrimaryVehicle>();
+    let mut rows = primary_query
+        .iter(world)
+        .map(|(entity, rcs)| (entity, "primary", rcs.propellant_used_kg))
+        .collect::<Vec<_>>();
+    let mut recovering_query =
+        world.query_filtered::<(Entity, &RocketRcs), With<RecoveringStage>>();
+    rows.extend(
+        recovering_query
+            .iter(world)
+            .map(|(entity, rcs)| (entity, "recovering-stage", rcs.propellant_used_kg)),
+    );
+    rows
+}
+
 pub fn run_headless_scenario_artifact(
     scenario: HeadlessScenario,
 ) -> Result<SimulationArtifact, String> {
@@ -309,15 +330,15 @@ pub fn run_headless_scenario_artifact(
             .resource_mut::<SimulationTelemetryRecorder>()
             .events,
     );
-    let rcs_used_kg = {
-        let world = app.world_mut();
-        let mut query = world.query::<&RocketRcs>();
-        query.iter(world).next().map(|rcs| rcs.propellant_used_kg)
-    };
-    if let Some(rcs_used_kg) = rcs_used_kg {
+    // Report RCS draw per vehicle. Selecting the first `RocketRcs` entity hid
+    // which vehicle it belonged to: a recovering booster draws from its own
+    // final stage, so a single number is not a comparison between vehicles.
+    for (entity, role, propellant_used_kg) in collect_rcs_summaries(app.world_mut()) {
         bevy::log::info!(
             target: "rcs_summary",
-            propellant_used_kg = rcs_used_kg,
+            role,
+            entity = ?entity,
+            propellant_used_kg,
             "RCS propellant summary"
         );
     }
@@ -421,6 +442,28 @@ mod tests {
     use super::*;
     use crate::domain::services::simulation_artifact::SimulationEventType;
     use crate::infrastructure::bevy_adapters::rocket::components::RocketTelemetry;
+
+    #[test]
+    fn rcs_summary_attributes_each_vehicle_separately() {
+        let mut world = World::new();
+        let primary = world.spawn(RocketRcs::representative(1.0e4, 220.0)).id();
+        world
+            .get_mut::<RocketRcs>(primary)
+            .unwrap()
+            .propellant_used_kg = 42.5;
+        let stage = world
+            .spawn((RocketRcs::representative(1.0e4, 220.0), RecoveringStage))
+            .id();
+        world
+            .get_mut::<RocketRcs>(stage)
+            .unwrap()
+            .propellant_used_kg = 15.9;
+
+        let rows = collect_rcs_summaries(&mut world);
+        assert_eq!(rows.len(), 2, "each vehicle reports its own draw");
+        assert!(rows.contains(&(primary, "primary", 42.5)));
+        assert!(rows.contains(&(stage, "recovering-stage", 15.9)));
+    }
 
     #[test]
     fn repeated_headless_runs_are_bitwise_deterministic_and_identified() {

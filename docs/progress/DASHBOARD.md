@@ -63,13 +63,13 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | this change |
 | `cargo check --no-default-features` | PASS (existing feature-disabled warnings) | this change |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | this change |
-| `cargo test --features dem` | library 1271 passed, 0 failed, 2 ignored; other targets pass | this change |
-| `cargo test --no-default-features` | library 1219 passed, 0 failed, 2 ignored | this change |
+| `cargo test --features dem` | library 1272 passed, 0 failed, 2 ignored; other targets pass | this change |
+| `cargo test --no-default-features` | library 1220 passed, 0 failed, 2 ignored | this change |
 | `openspec validate --all --strict` | 43 passed, 0 failed | this change |
 | `cargo build --release --features dem` | PASS | this change |
 | release three-mode smoke (15 s each) | PASS — all three exit 124, no ERROR/panic matches; startup only | this change |
 | default `cargo run` three-mode smoke (15 s each) | PASS — all three create mode windows, exit 124, no ERROR/panic matches | this change |
-| headless Falcon 9 / RTLS re-flight (5,400 s) | accepted 201.178314 × 199.975904 km, final primary mass 23,858.331 kg; recovery water impact 205.075 m/s vertical, 77.242 m/s lateral, 16.407° tilt, 705,303.064 m miss, 0 kg propellant; resolves at the sea surface instead of the seabed; RCS summary lacks entity attribution | this change |
+| headless Falcon 9 / RTLS re-flight (5,400 s) | accepted 201.178314 × 199.975904 km, final primary mass 23,858.331 kg; recovery water impact 205.075 m/s vertical, 77.242 m/s lateral, 16.407° tilt, 705,303.064 m miss, 0 kg propellant; resolves at the sea surface instead of the seabed; RCS draw now reported per vehicle, primary 42.482986 kg and recovering stage 15.887217 kg | this change |
 | downrange deck landing (committed 15 t, 656.25 s) | **VERIFIED for three near-track decks**, each flown twice with identical summaries: 25.53904, −88.40209 → 1.338 m/s vertical, 2.029 m/s lateral, 0.864° tilt, 625.553 kg left; 25.538992, −88.402547 → 1.330 / 0.634 m/s, 0.372°, 267.465 kg; 25.53902, −88.40232 → 1.328 / 1.276 m/s, 0.578°, 455.929 kg; all final `Landed` | this change |
 | fuel-limited deck counterexample | deck 25.53897, −88.40277: exhausts propellant, water impact 22.670 m/s vertical, 3.555 m/s lateral, 1.316° tilt, 0 kg left; reserve/diversion margin GAP | this change |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |

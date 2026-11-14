@@ -37,7 +37,7 @@ attitude response. One shared terminal law remains; physics coefficients and
 landing criteria were not tuned.
 
 The full gate passes: library counts
-are **1,271 with `dem` / 1,219 without**, two ignored each; strict Clippy,
+are **1,272 with `dem` / 1,220 without**, two ignored each; strict Clippy,
 OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
 still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
 
@@ -55,8 +55,9 @@ buoyancy or wetting.
 The 5,400 s RTLS re-flight confirms the prior 186.155 m/s / 706.186 km crash
 and 201.178314 × 199.975904 km primary orbit. Regression artifacts and tolerances
 are unchanged. Reserve stays 15 t; lateral convergence and fuel-margin robustness
-remain GAPs. RCS-summary entity attribution also needs correction before comparing
-its fuel numbers. See the audit's **Deck touchdown verification — 2026-11-14**.
+remain GAPs. RCS reporting is now per vehicle: primary 42.483 kg, recovering stage
+15.887 kg. See the audit's **Deck touchdown verification — 2026-11-14** and
+**RCS telemetry attribution — 2026-11-14**.
 
 The following describes the earlier realism-programme checkpoints.
 The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06

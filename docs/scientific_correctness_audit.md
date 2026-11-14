@@ -932,6 +932,30 @@ that energy. This is the same lift/crossflow gap recorded in residual 7 and the
 SC-03 residuals, not a tuning problem. The committed vehicle configuration stays
 at the 15 t reserve; 25 t is an experiment and is not committed.
 
+## RCS telemetry attribution — 2026-11-14
+
+**DEFECT — fixed, VERIFIED.** The headless summary reported one
+`propellant_used_kg` from whichever `RocketRcs` entity the query returned first.
+The recovering booster stays in the normal rocket pipeline and carries its own
+RCS cluster, so the printed value could silently be either vehicle. It was the
+booster's: 15.887217 kg.
+
+Reporting is now per vehicle, labelled by role and entity:
+
+| vehicle | entity | RCS propellant used |
+| --- | --- | ---: |
+| primary (Falcon 9 upper stage) | `1v0` | 42.482986 kg |
+| recovering booster | `2v0` | 15.887217 kg |
+
+The primary value reproduces the 42.483 kg recorded for the per-thruster split
+work, which the single-number summary had made unverifiable. The two figures are
+different vehicles drawing from different tanks; neither is a correction of the
+other. A unit test spawns one primary and one recovering vehicle and asserts both
+rows carry the right role and their own draw.
+
+This is a reporting change only. No allocation, torque, mass flow or propellant
+accounting changed, and the flight's final state is identical.
+
 ## Water-surface impact — 2026-11-14
 
 **DEFECT — fixed, IMPLEMENTED.** Collision used `TerrainSource::height_m` directly.
@@ -996,8 +1020,8 @@ That keeps both feature configurations testing the same geometry.
 
 - `cargo fmt --check`, both checks, `cargo clippy --all-targets --features dem --
   -D warnings`: PASS.
-- `cargo test --features dem`: **1,271 library tests passed**, two ignored.
-- `cargo test --no-default-features`: **1,219 library tests passed**, two ignored.
+- `cargo test --features dem`: **1,272 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,220 library tests passed**, two ignored.
 - `openspec validate --all --strict`: 43 items pass.
 - `cargo build --release --features dem`: PASS.
 - Three-mode release smoke, 15 s each: exit 124, no ERROR/panic matches.
@@ -1099,8 +1123,9 @@ The committed reserve remains 15 t. SC-01 retro-thrust, drag, lift, engine limit
 landing criteria and vehicle configuration are unchanged. Measured margins of
 626 kg / 267 kg / 456 kg are for these scenarios, not a certified operational
 reserve, and the 267 kg case shows how thin the margin can get.
-Water-surface impact, entry-lift/flight-path fidelity, RCS station/tank fidelity,
-unattributed RCS summary and SC-06 immutable-source promotion remain open.
+Water-surface impact modelling, entry-lift/flight-path fidelity, RCS station/tank
+fidelity (the cluster remains representative) and SC-06 immutable-source
+promotion remain open. RCS *reporting* attribution is fixed.
 
 RTLS was deliberately re-flown for 345,600 ticks with no deck. Its impact figures
 changed once water became the collidable surface, and are recorded under
@@ -1183,10 +1208,9 @@ RTLS revalidation confirms the previous rounded impact figures and the primary
 vehicle's accepted 201.178314 × 199.975904 km orbit and final mass 23,858.331 kg.
 The anticipated RTLS change did not appear in these measured outcomes: the
 reserve is already exhausted. All committed regression artifacts and tolerances
-remain unchanged and pass. The current `rcs_summary` prints 15.887217 kg, but
-inspection finds it selects the first `RocketRcs` entity without identifying
-the vehicle. It cannot substantiate the earlier 42.483 kg comparison; per-vehicle
-RCS reporting remains a telemetry GAP rather than a physics change in this work.
+remain unchanged and pass. The `rcs_summary` line originally printed a single
+number from the first `RocketRcs` entity it found, without saying which vehicle
+that was; see **RCS telemetry attribution — 2026-11-14**.
 
 Run provenance printed by the final RTLS flight:
 
