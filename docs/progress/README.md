@@ -51,6 +51,13 @@ A 5 × 5 deck grid brackets the committed-reserve capture window at about 50 m
 up-track and 50 m cross-track, with 127–670 kg of margin depending on direction;
 beyond it the stage exhausts propellant. The three verified decks are unchanged.
 
+The reserve question was measured rather than argued: a 25 t variant (temporary
+local asset edit, reverted) moves the entry track ~92 km downrange, so the
+committed deck never sees an ignition, and on its own track it reaches the deck at
+1.63 m/s vertical but 8.67 m/s lateral — a lateral-speed crash with 2.78 t unused.
+Extra reserve is a mission redesign, not a free widening. The committed 15 t
+configuration is unchanged and verified.
+
 Collision now stops at the **sea surface** rather than the seabed, using the
 terrain source's `SurfaceClass` and EGM2008 datum instead of raw bathymetry. The
 RTLS water impact is re-measured at 205.075 m/s vertical, 77.242 m/s lateral and

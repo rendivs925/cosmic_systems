@@ -988,6 +988,49 @@ Tests: a domain test asserts a 5 rad/s contact crashes while the same speeds at
 above open Gulf water and asserts the verdict is `Crash` with
 `over_water = true`, never `Landed`.
 
+## Reserve trade measured — 2026-11-14
+
+**Experiment; the committed configuration is unchanged.** The open reserve
+question was whether 25 t simply widens the 15 t capture window. It does not.
+Both variants were flown through the same 25-point deck grid, with the only
+difference a temporary local edit to `falcon9.ron`
+(`recovery_propellant_reserve_kg: 25_000.0`). That edit was reverted; the
+committed asset and its configuration hash are verified below.
+
+| measured | 15 t (committed) | 25 t (experiment) |
+| --- | --- | --- |
+| vehicle configuration SHA-256 | `c245abf9…a596` | `79f7a6a8…b651` |
+| 5 × 5 grid around 25.53904, −88.40209 | 9 landings, 127–670 kg left | 0 landings, all crash |
+| contact at the best grid cell | 1.34 m/s vertical, 2.03 m/s lateral, 626 kg left | grid never reached the deck |
+| where the stage actually comes down | at the deck | 25.57579, −89.33067 |
+| a deck placed on that track | — | 1.63 m/s vertical, **8.67 m/s lateral**, 2,779.65 kg left → crash |
+
+Three results matter:
+
+1. **Reserve changes the trajectory, not just the margin.** With 25 t the stage
+   enters heavier and its ballistic track moves about 92 km downrange. At the
+   committed deck the ignition gate is never satisfied: the stage passes
+   overhead and crashes at 271.8 m/s with 14,008 kg still aboard — the same
+   post-entry-burn mass the older experiment reported.
+2. **On its own track, 25 t fails on lateral speed, not fuel.** It reaches the
+   deck plane at 1.63 m/s vertical, comfortably inside the 5 m/s limit, while
+   still drifting 8.67 m/s sideways against a 3 m/s limit, with 2.78 t of
+   propellant unused. Extra propellant cannot buy that back with the current
+   terminal gains: the heavier vehicle responds more slowly to the same
+   attitude commands.
+3. **So "more reserve" is a mission-design change, not a free widening.** A
+   reserve change invalidates the deck placement, the entry track and the
+   terminal tuning together.
+
+The committed 15 t configuration stays. Restoring the asset reproduces the
+committed hash `c245abf9615e…a596` and the deck at 25.53904, −88.40209 lands
+again with 625.552795 kg left, identical to the verified run.
+
+This is also why the reserve is recorded as a **GAP with a measured shape**
+rather than a defect: the 15 t envelope is ~50 m of placement tolerance, and the
+25 t alternative trades that for a shifted track and a lateral-speed failure
+that the current fixed terminal gains cannot absorb.
+
 ## Water-surface impact — 2026-11-14
 
 **DEFECT — fixed, IMPLEMENTED.** Collision used `TerrainSource::height_m` directly.
