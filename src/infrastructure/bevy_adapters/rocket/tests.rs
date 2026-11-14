@@ -549,10 +549,24 @@ mod ground_contact_tests {
                 base_reflectance: 1.0,
                 base_roughness: 1.0,
             },
-            PlanetTerrain::earth(),
+            PlanetTerrain {
+                source: std::sync::Arc::new(super::ascent_pipeline_tests::PadPinnedTerrain::new(
+                    super::ascent_pipeline_tests::KSC_BASELINE_LAUNCH_HEIGHT_M,
+                    ksc_terrain_coordinates().0,
+                    ksc_terrain_coordinates().1,
+                )),
+            },
         ));
 
-        let source = PlanetTerrain::earth().source;
+        let pin_terrain = || {
+            super::ascent_pipeline_tests::PadPinnedTerrain::new(
+                super::ascent_pipeline_tests::KSC_BASELINE_LAUNCH_HEIGHT_M,
+                ksc_terrain_coordinates().0,
+                ksc_terrain_coordinates().1,
+            )
+        };
+        let source: std::sync::Arc<dyn crate::domain::services::terrain_source::TerrainSource> =
+            std::sync::Arc::new(pin_terrain());
         let (lat, lon) = ksc_terrain_coordinates();
         let h = source.height_m(lat, lon);
         let up = radial_direction(lat, lon);
@@ -655,8 +669,8 @@ mod ground_contact_tests {
         let (rocket, rest, collision) = q.single(world).unwrap();
 
         assert!(rest.active, "vehicle must still be resting on the pad");
-        let (lat, lon) = ksc_terrain_coordinates();
-        let h = PlanetTerrain::earth().source.height_m(lat, lon);
+        // The fixture pins its pad; read that pad, not the raw Earth source.
+        let h = super::ascent_pipeline_tests::KSC_BASELINE_LAUNCH_HEIGHT_M;
         let expected_r = EARTH_RADIUS_M + h + 5.0;
         assert!(
             (rocket.dynamics.position_m.length() - expected_r).abs() < 0.05,
@@ -759,8 +773,7 @@ mod ground_contact_tests {
         let mut app = {
             let mut app = pad_app(0.0, 20.0); // engines off
             let world = app.world_mut();
-            let (lat, lon) = ksc_terrain_coordinates();
-            let h = PlanetTerrain::earth().source.height_m(lat, lon);
+            let h = super::ascent_pipeline_tests::KSC_BASELINE_LAUNCH_HEIGHT_M;
             surface_r = EARTH_RADIUS_M + h;
 
             let (entity, up, mass_kg, inertia_body, com) = {
@@ -1380,7 +1393,13 @@ mod recovery_pipeline_tests {
         let planet =
             crate::domain::services::planet_factory::PlanetFactory::create_by_name("Earth")
                 .expect("Earth exists");
-        let terrain = PlanetTerrain::earth();
+        let terrain = PlanetTerrain {
+            source: std::sync::Arc::new(super::ascent_pipeline_tests::PadPinnedTerrain::new(
+                super::ascent_pipeline_tests::KSC_BASELINE_LAUNCH_HEIGHT_M,
+                ksc_terrain_coordinates().0,
+                ksc_terrain_coordinates().1,
+            )),
+        };
         let terrain_source = terrain.source.clone();
         app.world_mut().spawn((
             PlanetComponent {
@@ -1755,7 +1774,7 @@ mod ascent_pipeline_tests {
     /// correction cannot move a committed trajectory while the samples stay
     /// bit-identical. `height_m` at this site is still exercised by the
     /// terrain and contact tests.
-    const KSC_BASELINE_LAUNCH_HEIGHT_M: f64 = f64::from_bits(0xc03ea4ab36d7a4c7);
+    pub(super) const KSC_BASELINE_LAUNCH_HEIGHT_M: f64 = f64::from_bits(0xc03ea4ab36d7a4c7);
 
     /// Earth terrain with a fixed flat pad at the launch point.
     ///
@@ -1765,7 +1784,7 @@ mod ascent_pipeline_tests {
     /// Earth source (the flight leaves the pad within the first ticks, and the
     /// orbital fixture never touches it).
     #[derive(Debug)]
-    struct PadPinnedTerrain {
+    pub(super) struct PadPinnedTerrain {
         inner: std::sync::Arc<dyn TerrainSource>,
         pad_up: DVec3,
         pin_cos: f64,
@@ -1773,7 +1792,7 @@ mod ascent_pipeline_tests {
     }
 
     impl PadPinnedTerrain {
-        fn new(pad_height_m: f64, pad_lat: f64, pad_lon: f64) -> Self {
+        pub(super) fn new(pad_height_m: f64, pad_lat: f64, pad_lon: f64) -> Self {
             const PIN_RADIUS_M: f64 = 50_000.0;
             let pad_up = radial_direction(pad_lat, pad_lon);
             Self {
@@ -1820,6 +1839,21 @@ mod ascent_pipeline_tests {
 
         fn sea_level_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> f64 {
             self.inner.sea_level_height_m(latitude_deg, longitude_deg)
+        }
+
+        /// The pinned pad is a built platform, so it is land even though its
+        /// height sits a metre below the local geoid. Without this the pad would
+        /// be classified as ocean and its contact surface raised to the datum.
+        fn surface_class(
+            &self,
+            latitude_deg: f64,
+            longitude_deg: f64,
+        ) -> crate::domain::services::terrain_source::SurfaceClass {
+            if self.pinned_at(latitude_deg, longitude_deg) {
+                crate::domain::services::terrain_source::SurfaceClass::Land
+            } else {
+                self.inner.surface_class(latitude_deg, longitude_deg)
+            }
         }
 
         fn resident_measured_height_m(&self, latitude_deg: f64, longitude_deg: f64) -> Option<f64> {
@@ -3377,7 +3411,7 @@ mod determinism_regression_tests {
     /// Run one fixed-step scenario and capture the initial state plus every
     /// completed tick. The sampled state remains the authoritative physics
     /// state, not a render transform or a presentation checkpoint.
-    fn record_app_samples(mut app: App, ticks: usize) -> Vec<RocketStateSample> {
+    pub(super) fn record_app_samples(mut app: App, ticks: usize) -> Vec<RocketStateSample> {
         let mut samples = Vec::with_capacity(ticks + 1);
         samples.push(capture_sample(&mut app));
         for _ in 0..ticks {
@@ -3395,7 +3429,7 @@ mod determinism_regression_tests {
         record_app_samples(ascent_app(), GRAVITY_TURN_RECORD_TICKS)
     }
 
-    fn safe_leo_insertion_app() -> App {
+    pub(super) fn safe_leo_insertion_app() -> App {
         let target = LowEarthOrbitTarget::default();
         let radius_m = EARTH_RADIUS_M + target.target_apoapsis_altitude_m;
         let circular_speed_mps = (gravitational_parameter(5.972e24) / radius_m).sqrt();
@@ -3426,6 +3460,13 @@ mod determinism_regression_tests {
             .get_mut::<RocketAutopilot>(entity)
             .expect("ascent vehicle autopilot")
             .mode = AutopilotMode::Ascent;
+        // The fixture constructs an orbiting state, not a pad hold. Leaving the
+        // ascent app's `GroundRest` latched made the ground-contact system damp
+        // this vehicle's velocity along the local surface normal every tick.
+        world
+            .get_mut::<GroundRest>(entity)
+            .expect("ascent vehicle ground rest")
+            .active = false;
         app
     }
 

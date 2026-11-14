@@ -8,7 +8,7 @@
 
 use crate::domain::math::DVec3;
 use crate::domain::services::reference_frames::body_fixed_to_terrain_lat_lon;
-use crate::domain::services::terrain_source::TerrainSource;
+use crate::domain::services::terrain_source::{SurfaceClass, TerrainSource};
 
 /// A surface sample at a latitude/longitude.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,6 +115,57 @@ pub fn radar_altitude_m(
     let dir = position_body_fixed_m / r;
     let (lat, lon) = body_fixed_to_terrain_lat_lon(dir);
     let surface_height_m = source.height_m(lat, lon);
+    let surface_radius = planet_radius_m + surface_height_m;
+    (r - surface_radius).max(0.0)
+}
+
+/// The surface a vehicle can actually strike.
+///
+/// [`TerrainSource::height_m`] is signed: over an ocean it returns the **sea
+/// floor**, kilometres below the rendered sea-level surface. A vehicle crossing
+/// the water surface cannot continue to the floor first, so impact, radar
+/// altitude and contact normals must use the sea-level datum wherever the
+/// terrain source classifies the surface as ocean. Bathymetry stays in the
+/// terrain source; it is simply not the collidable surface. Classification is
+/// the source's own authority, not a height comparison, because a graded coastal
+/// pad can sit within a metre of the datum but is a built platform, not water.
+///
+/// `sea_level_height_m` is the source's own datum, not zero: on Earth it is the
+/// local EGM2008 undulation, so comparing against zero would misclassify a graded
+/// coastal pad and move a launch pad by tens of metres.
+pub fn contact_surface_height_m(
+    terrain_height_m: f64,
+    sea_level_height_m: f64,
+    open_water: bool,
+) -> f64 {
+    if open_water {
+        sea_level_height_m
+    } else {
+        terrain_height_m
+    }
+}
+
+/// Altitude above the **collidable** surface for a planet-centered body-fixed
+/// position: terrain on land, the sea-level datum over an ocean. Use this for
+/// impact, radar altitude and despawn decisions; [`radar_altitude_m`] remains
+/// the raw terrain-relative measure for bathymetry and render checks.
+pub fn contact_altitude_m(
+    source: &dyn TerrainSource,
+    position_body_fixed_m: DVec3,
+    planet_radius_m: f64,
+    has_ocean: bool,
+) -> f64 {
+    let r = position_body_fixed_m.length();
+    if r < 1e-6 {
+        return 0.0;
+    }
+    let dir = position_body_fixed_m / r;
+    let (lat, lon) = body_fixed_to_terrain_lat_lon(dir);
+    let terrain_height_m = source.height_m(lat, lon);
+    let sea_level_height_m = source.sea_level_height_m(lat, lon);
+    let open_water = has_ocean && source.surface_class(lat, lon) == SurfaceClass::Ocean;
+    let surface_height_m =
+        contact_surface_height_m(terrain_height_m, sea_level_height_m, open_water);
     let surface_radius = planet_radius_m + surface_height_m;
     (r - surface_radius).max(0.0)
 }
@@ -449,6 +500,26 @@ mod tests {
         fn elevation_bounds_m(&self) -> ElevationBounds {
             ElevationBounds::new(0.0, 0.0)
         }
+    }
+
+    #[test]
+    fn ocean_surface_stops_a_vehicle_above_the_sea_floor() {
+        // Signed terrain over an ocean is bathymetry; the vehicle strikes the
+        // sea-level datum, not the floor kilometres below it.
+        let sea_floor_m = -3_390.0;
+        let sea_level_m = -27.2;
+        assert_eq!(
+            contact_surface_height_m(sea_floor_m, sea_level_m, true),
+            sea_level_m
+        );
+        assert_eq!(
+            contact_surface_height_m(sea_floor_m, sea_level_m, false),
+            sea_floor_m
+        );
+        // A graded coastal pad sits 3 m above its own datum; the datum is not
+        // zero, so it must stay land even though it is below mean radius.
+        assert_eq!(contact_surface_height_m(3.0, -29.7, false), 3.0);
+        assert_eq!(contact_surface_height_m(-26.7, -29.7, false), -26.7);
     }
 
     #[test]

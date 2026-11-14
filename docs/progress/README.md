@@ -37,13 +37,21 @@ attitude response. One shared terminal law remains; physics coefficients and
 landing criteria were not tuned.
 
 The full gate passes: library counts
-are **1,270 with `dem` / 1,218 without**, two ignored each; strict Clippy,
+are **1,271 with `dem` / 1,219 without**, two ignored each; strict Clippy,
 OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
 still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
 
 At 25.53897, −88.40277 the stage still exhausts propellant before the deck and
-falls to the sea floor. Diversion against the 15 t reserve remains the binding
+falls into the sea. Diversion against the 15 t reserve remains the binding
 limit; the verified envelope is bounded, not a general recovery-envelope claim.
+
+Collision now stops at the **sea surface** rather than the seabed, using the
+terrain source's `SurfaceClass` and EGM2008 datum instead of raw bathymetry. The
+RTLS water impact is re-measured at 205.075 m/s vertical, 77.242 m/s lateral and
+16.407° tilt (was a seabed impact at 186.155 m/s). One test baseline was
+deliberately re-recorded: it had encoded an orbiting vehicle being damped as
+"resting". Water is still a surface arrest, not a fluid — no splashdown,
+buoyancy or wetting.
 The 5,400 s RTLS re-flight confirms the prior 186.155 m/s / 706.186 km crash
 and 201.178314 × 199.975904 km primary orbit. Regression artifacts and tolerances
 are unchanged. Reserve stays 15 t; lateral convergence and fuel-margin robustness

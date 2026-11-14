@@ -15,9 +15,10 @@ use crate::domain::services::rocket_dynamics::orientation_from_up_and_heading;
 use crate::domain::services::rocket_propulsion::stage_thrust_body;
 use crate::domain::services::simulation_time::SimulationTime;
 use crate::domain::services::terrain_collision::{
-    decompose_velocity, evaluate_touchdown, liftoff_from_rest, resolve_resting_contact,
-    sample_surface, GroundContact, TouchdownCriteria,
+    contact_surface_height_m, decompose_velocity, evaluate_touchdown, liftoff_from_rest,
+    resolve_resting_contact, sample_surface, GroundContact, TouchdownCriteria,
 };
+use crate::domain::services::terrain_source::SurfaceClass;
 use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -183,17 +184,27 @@ pub fn resolve_ground_contact(
                 )
             },
         );
-        let surface_radius_m = radius_m + sample.height_m;
+        let sea_level_height_m = planet_terrain.source.sea_level_height_m(lat, lon);
+        // The terrain source owns the surface class; a height comparison would
+        // call a graded coastal pad water when it sits a metre below the datum.
+        let over_water = planet.domain_planet.has_ocean
+            && planet_terrain.source.surface_class(lat, lon) == SurfaceClass::Ocean;
+        let surface_radius_m =
+            radius_m + contact_surface_height_m(sample.height_m, sea_level_height_m, over_water);
         let signed_altitude_m = contact_position_m.length() - surface_radius_m;
+        // An ocean surface is the sea-level geoid, not the sloped sea floor, and
+        // its impact is flat.
 
         collision.radar_altitude_m = signed_altitude_m.max(0.0);
-        collision.slope_deg = sample.slope_deg;
-        collision.over_water = planet.domain_planet.has_ocean && sample.height_m < 0.0;
+        collision.slope_deg = if over_water { 0.0 } else { sample.slope_deg };
+        collision.over_water = over_water;
 
         let body_to_inertial = orientation
             .filter(|_| rotating_surface)
             .map_or(DQuat::IDENTITY, body_fixed_to_planet_inertial_rotation);
-        let normal = if sample.normal.length_squared() > 1e-12 {
+        let normal = if over_water {
+            body_to_inertial * dir_bf
+        } else if sample.normal.length_squared() > 1e-12 {
             body_to_inertial * sample.normal
         } else {
             body_to_inertial * dir_bf

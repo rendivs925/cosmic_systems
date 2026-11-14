@@ -932,6 +932,82 @@ that energy. This is the same lift/crossflow gap recorded in residual 7 and the
 SC-03 residuals, not a tuning problem. The committed vehicle configuration stays
 at the 15 t reserve; 25 t is an experiment and is not committed.
 
+## Water-surface impact — 2026-11-14
+
+**DEFECT — fixed, IMPLEMENTED.** Collision used `TerrainSource::height_m` directly.
+That field is signed bathymetry over an ocean, so a stage that missed its deck
+fell **through** the rendered sea surface and was stopped at the sea floor
+3.3–3.4 km below. Radar altitude, impact speed and the crash location were all
+measured against the seabed.
+
+### What changed
+
+- `terrain_collision::contact_surface_height_m` returns the source's sea-level
+  datum where the surface is open water, and the terrain height otherwise.
+- The datum is `TerrainSource::sea_level_height_m`, **not zero**: on Earth it is
+  the local EGM2008 undulation. Comparing against zero is wrong by tens of metres
+  at the sites this simulator launches from.
+- Water is decided by the source's own `SurfaceClass`, not a height comparison.
+  A graded coastal pad can sit within a metre of the datum and is still a built
+  platform; a height test would have moved the launch pad by that margin.
+- Over water the contact normal is the sea-level radial direction and the slope
+  is zero, because a sea surface is a geoid, not the sloped seabed.
+- `contact_altitude_m` applies the same rule to spent-stage debris despawn, so
+  debris stops at the surface rather than 3.3 km below it.
+
+Bathymetry is untouched: it remains terrain data for depth, materials and
+rendering. It is simply not the surface a vehicle can strike.
+
+### Measured effect
+
+Both recovered vehicles are over the Gulf. The deck landings below are unchanged
+to every printed digit, because they contact the deck, not the sea.
+
+| flight | before (sea floor) | after (sea surface) |
+| --- | --- | --- |
+| RTLS stage, no deck | 186.155 m/s vertical, 31.822 m/s lateral, 8.726° tilt, 706,186.117 m miss | 205.075 m/s vertical, 77.242 m/s lateral, 16.407° tilt, 705,303.064 m miss |
+| deck 25.53897, −88.40277 (out of fuel) | 168.434 m/s vertical, 34.346 m/s lateral | 22.670 m/s vertical, 3.555 m/s lateral, 1.316° tilt |
+
+The RTLS impact is now faster and more tilted because it is arrested 3.4 km
+higher, earlier in the same fall. That is the honest measurement; the previous
+figures described a seabed impact. The primary vehicle is unaffected: mass
+23,858.331 kg, the same final position and velocity, 201.178314 × 199.975904 km.
+The RTLS recovery remains a crash and is still not a landing.
+
+### A test artifact this exposed
+
+`safe_leo_insertion_app` constructs a 200 km orbital state on top of the ascent
+fixture, which leaves `GroundRest` latched. The contact system therefore damped
+this orbiting vehicle's velocity along the local surface normal every tick, and
+the committed baseline encoded that damping — including the old seabed normal.
+The fixture now clears `GroundRest`, and `leo-insertion-safe` was **deliberately
+re-recorded** with an `intended_baseline_divergence: Expected` audit entry naming
+the artifact. Tick 2 now records the undamped 7788.52 m/s circular state instead
+of a 0.829× damped value. No physics, tolerance or guidance changed to make the
+test pass, and the other two baselines remain bit-identical.
+
+The pad-holding and recovery fixtures now pin their launch pad through the
+existing `PadPinnedTerrain`, declaring it land. Without the `dem` payload pyramid
+the procedural fallback puts Kennedy Space Center ~991 m below sea level, which
+is a data-availability artifact, not a pad; the fixtures previously inherited it.
+That keeps both feature configurations testing the same geometry.
+
+### Validation
+
+- `cargo fmt --check`, both checks, `cargo clippy --all-targets --features dem --
+  -D warnings`: PASS.
+- `cargo test --features dem`: **1,271 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,219 library tests passed**, two ignored.
+- `openspec validate --all --strict`: 43 items pass.
+- `cargo build --release --features dem`: PASS.
+- Three-mode release smoke, 15 s each: exit 124, no ERROR/panic matches.
+- Headless: three deck landings (all `Landed`, identical to the pre-change
+  figures), one out-of-fuel deck crash, and the RTLS re-flight above.
+
+Water is still not modelled as a fluid: there is no splashdown, buoyancy, or
+wetting. A water contact is a surface arrest and a crash verdict, which is the
+honest limit of this change.
+
 ## Deck touchdown verification — 2026-11-14
 
 **VERIFIED for three specified headless deck placements, not the general
@@ -1026,13 +1102,11 @@ reserve, and the 267 kg case shows how thin the margin can get.
 Water-surface impact, entry-lift/flight-path fidelity, RCS station/tank fidelity,
 unattributed RCS summary and SC-06 immutable-source promotion remain open.
 
-RTLS was deliberately re-flown for 345,600 ticks with no deck, using the final
-gains: impact remains 186.154696360 m/s vertical, 31.822342106 m/s lateral,
-8.726413347° tilt, 706,186.117161 m miss, zero fuel and 25,592.125 kg, each
-identical to the preceding re-flight. Primary final mass is 23,858.331 kg and the
-accepted orbit remains 201.178314 × 199.975904 km. Vehicle, terrain and kernel
-hashes are the same. Committed regression artifacts and tolerances remain
-unchanged and pass.
+RTLS was deliberately re-flown for 345,600 ticks with no deck. Its impact figures
+changed once water became the collidable surface, and are recorded under
+**Water-surface impact — 2026-11-14**. The primary vehicle is unchanged:
+23,858.331 kg, the same final state, 201.178314 × 199.975904 km. Vehicle, terrain
+and kernel hashes are the same, and the committed regression artifacts pass.
 
 ### Validation for the touchdown correction
 
@@ -1099,6 +1173,11 @@ The scorecard distance is recorded at terrain contact; it is **not** deck-plane
 crossing error. The final deck output exactly matches the diagnostic sequence
 flight's recovery summary after diagnostic removal. No deck location sweep or
 physics coefficient tuning was used to manufacture a successful contact.
+
+Both columns record a **seabed** contact, which the later water-surface fix
+replaced; the RTLS column is superseded by **Water-surface impact — 2026-11-14**.
+The deck column is also superseded: that placement now lands (see the deck
+touchdown table below).
 
 RTLS revalidation confirms the previous rounded impact figures and the primary
 vehicle's accepted 201.178314 × 199.975904 km orbit and final mass 23,858.331 kg.

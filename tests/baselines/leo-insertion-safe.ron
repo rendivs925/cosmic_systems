@@ -1,6 +1,6 @@
 (
     name: "leo-insertion-safe",
-    git_commit: "8c6813a",
+    git_commit: "0e96d79",
     run_identity: (
         scenario_id: "leo-insertion-safe",
         vehicle_model_id: "electron-like-test-fixture",
@@ -14,12 +14,12 @@
         numerical_integrator: "semi-implicit Euler",
         fixed_timestep_s: 0.015625,
         random_seed: None,
-        software_revision: "8c6813a",
+        software_revision: "0e96d79",
     ),
     audit: (
-        change_description: "add a deterministic safe low-Earth-orbit insertion regression recording for the existing ascent completion predicate",
-        expected_improvement: "pins the authoritative orbit-completion transition and thrust cutoff for a valid inclined circular target state",
-        numerical_tradeoffs: "records two existing fixed-update calls from a constructed target state without changing orbital mechanics, tolerances, or guidance behavior",
+        change_description: "clear the ascent fixture's latched GroundRest in the constructed orbital state; a vehicle at 200 km is not resting on the surface",
+        expected_improvement: "the recorded insertion state is no longer damped along the local surface normal by the ground-contact system, so the sample reflects the authoritative circular state the predicate is meant to test",
+        numerical_tradeoffs: "tick 2 velocity returns to the undamped 7788.52 m/s circular state instead of a 0.829x damped value; angular velocity is 8.25e-4 rad/s from the attitude controller instead of exactly zero; no physics, tolerance or guidance changed",
         affected_scenarios: [
             "leo-insertion-safe",
             "authoritative orbit completion",
@@ -29,7 +29,7 @@
             ("earth-ssb-j2000-de441"),
         ],
         intended_baseline_divergence: Expected(
-            description: "new deterministic scenario; no predecessor recording exists",
+            description: "removes a fixture artifact: an orbiting vehicle was latched as resting, so contact damping rewrote its velocity. The shipped collision change also replaced the sloped sea-floor normal with the sea-level normal, which exposed it.",
         ),
         scientific_acceptance_output: Unverified(
             reason: "this internal insertion-state recording is not an external orbit-propagation accuracy claim",
@@ -56,9 +56,9 @@
         ),
         (
             position_m: (6570999.999657685, -95.81741485054657, 75.02558784427744),
-            velocity_mps: (-1282.0069627118662, -4852.280666376237, 3845.5262439220905),
-            orientation: (-0.5051536943480038, -0.000002680942207116416, -0.08319745221939114, 0.8590098538570895),
-            angular_velocity_radps: (0.0, 0.0, 0.0),
+            velocity_mps: (-0.0219081545839328, -6132.31455043498, 4801.637622033756),
+            orientation: (-0.5051536943480038, -0.0000026809422071162997, -0.08319745221939114, 0.8590098538570895),
+            angular_velocity_radps: (0.0005832581520546549, 0.0, -0.0005832581520546549),
             mass_kg: 12500.0,
             guidance_code: 3,
         ),
@@ -66,6 +66,6 @@
     hash_chain: [
         11591041705895543716,
         11591041705895543716,
-        13980505615898666036,
+        13696506106843115803,
     ],
 )

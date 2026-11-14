@@ -13,7 +13,7 @@ use crate::application::rocket_spawning::spawn_landing_leg_meshes;
 use crate::domain::services::aerodynamics::drag_force_body;
 use crate::domain::services::landing_gear::LandingGear;
 use crate::domain::services::reference_frames::planet_inertial_to_body_fixed;
-use crate::domain::services::terrain_collision::radar_altitude_m;
+use crate::domain::services::terrain_collision::contact_altitude_m;
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 use crate::infrastructure::bevy_adapters::entity_components::{PlanetComponent, PlanetTerrain};
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
@@ -207,7 +207,12 @@ pub fn update_spent_stage_lifecycle(
         };
         let position_body_fixed_m =
             planet_inertial_to_body_fixed(debris.dynamics.position_m, orientation);
-        let agl_m = radar_altitude_m(&*planet_terrain.source, position_body_fixed_m, radius_m);
+        let agl_m = contact_altitude_m(
+            &*planet_terrain.source,
+            position_body_fixed_m,
+            radius_m,
+            planet.domain_planet.has_ocean,
+        );
         if agl_m > SPENT_STAGE_DESPAWN_AGL_M {
             continue;
         }
