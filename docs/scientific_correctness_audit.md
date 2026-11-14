@@ -903,7 +903,7 @@ path itself.
 
 | gap | mechanism | where |
 | --- | --- | --- |
-| Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2 | Entry energy |
+| Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2; the 70 km burn ignites 135° off retrograde and adds 49 m/s before removing 334 | Entry energy |
 | Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
 | Capture window | fixed ballistic track, no commanded lift; a naive lift trim moved the stage km off track (see Entry lift trim) | Capture envelope |
 | Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin | Coast attitude limit cycle |
@@ -1071,7 +1071,10 @@ deceleration. A returning Falcon 9 first stage is subsonic by roughly 10 km; thi
 one is still at Mach 3.5 there and does not reach Mach 1 until about 6 km. The
 stage also coasts to a 169.27 km apogee before the burn, then lights 3 engines at
 70.0 km on the descending leg (t≈448 s) and cuts at 55.4 km (t≈460 s), removing
-287 m/s of airspeed for 10.25 t of propellant.
+287 m/s of airspeed for 10.25 t of propellant. That net figure hides a misaligned
+ignition: at 70 km the stage is 135° off retrograde, so the first ~2.5 s of the
+burn add 49 m/s before the aligned remainder removes 334 m/s (see **Coast attitude
+limit cycle**). The deficit therefore has two measured components, not one.
 
 ### The flight is outside its own declared corridor
 
@@ -1526,6 +1529,35 @@ limit cycle 0.505 t, and 0.626 t remains. The entry burn is still the dominant
 consumer, so this does not overturn the entry-energy conclusion — but the
 "propellant exhaustion" failures in the capture grid are not purely a landing-burn
 shortfall.
+
+### The entry burn lights while the stage is still 135° off retrograde
+
+The burn gate is altitude/velocity only; the attitude law is the only alignment
+mechanism, and the limit cycle means it has not converged at 70 km. The same
+flight, `RUST_LOG=info,rocket_entry=debug`:
+
+| T+ s | throttle | alpha | airspeed |
+| ---: | ---: | ---: | ---: |
+| 447 | 0.000 | 40.6° | 2,675.9 m/s |
+| 448 | 0.156 | 45.3° | 2,680.8 m/s |
+| 449 | 1.000 | 67.7° | 2,723.5 m/s |
+| 450 | 1.000 | **135.7°** | **2,729.6 m/s** |
+| 451 | 1.000 | 172.7° | 2,699.3 m/s |
+| 460 | 0.000 | 174.5° | 2,395.5 m/s |
+
+The first ~2.5 s of thrust point mostly prograde: airspeed **rises 49 m/s** to a
+2,729.6 m/s peak before the gimbal slews the stage to 173° at up to 1.33 rad/s.
+Gravity along the ~31° flight path accounts for only about 10 m/s of that rise, so
+the rest is thrust. The aligned part of the burn then removes 334 m/s. The recorded net is the familiar
+287 m/s, but it understates the burn: the stage pays for a prograde impulse and
+then buys it back. This is a second cost of the coast limit cycle, and it means
+the "entry energy" deficit has two measured components — the SC-01 high-Mach
+thrust correlation and a misaligned ignition.
+
+The code comment that claimed the attitude law had already pointed the engines
+into the flow was wrong and now records the measurement instead. No gate changed:
+an attitude interlock would delay the burn and move the track, which re-places the
+verified decks.
 
 **Not fixed here, deliberately.** The sound remedies are an authority-aware
 attitude command — a rate-limited reference or a time-optimal braking curve built

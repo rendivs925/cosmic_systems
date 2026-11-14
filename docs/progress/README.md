@@ -61,9 +61,11 @@ is commanded to flip engines-first, and the PID asks for up to **1.0e8 N·m** wh
 the representative cluster can deliver **5.0e3 N·m per axis**. With no braking
 curve the flip overshoots and limit-cycles for about five minutes, drawing
 **504.8 kg** from the final-stage tank — 44.6 % of the 625.553 kg a landed stage
-has left. It ends when aerodynamic damping arrives at T+464 s. The trace is
-`RUST_LOG=info,rocket_rcs=debug`; no control law was changed and the landing
-figures are unchanged.
+has left. It ends when aerodynamic damping arrives at T+464 s. The same loop
+means the 70 km entry burn lights 135° off retrograde: the first ~2.5 s of thrust
+are mostly prograde and add 49 m/s before the aligned remainder removes 334 m/s.
+The traces are `RUST_LOG=info,rocket_rcs=debug` and `rocket_entry=debug`; no
+control law or gate was changed and the landing figures are unchanged.
 
 Tracing the 25 t case found the mechanism: the terminal law descends without
 checking lateral alignment, so a large arrival error crosses the deck plane ~78 m

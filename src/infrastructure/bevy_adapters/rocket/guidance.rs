@@ -829,11 +829,18 @@ pub fn guidance_system(
                 commands.throttle_cmd = 0.0;
 
                 // A downrange recovery latches an entry burn at a descending
-                // altitude gate. The attitude law above already points the
-                // engines into the flow, so the burn only needs throttle and
-                // the correct engine subset. The latch lives in the domain
-                // sequence, not in a velocity threshold, so it cannot chatter
-                // through an apogee or re-light after cutoff.
+                // altitude gate. The attitude law above is the only alignment
+                // mechanism; the gate itself is altitude/velocity only, so the
+                // burn can light before the stage has finished rotating
+                // retrograde. Measured on the committed deck flight at 70 km:
+                // 45° of angle of attack and 135° of attitude error at
+                // ignition, so the first ~2.5 s of thrust are mostly prograde
+                // (airspeed rises 49 m/s) before the gimbal brings the stage to
+                // 173° and the aligned burn removes 334 m/s. An attitude interlock would move the burn
+                // and therefore the track, so it is a recorded decision, not a
+                // silent gate. The latch lives in the domain sequence, not in a
+                // velocity threshold, so it cannot chatter through an apogee or
+                // re-light after cutoff.
                 if let (Some(burn), Some(selection)) =
                     (entry_burn.as_mut(), engine_selection.as_mut())
                 {
