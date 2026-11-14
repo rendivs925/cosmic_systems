@@ -1530,6 +1530,13 @@ consumer, so this does not overturn the entry-energy conclusion — but the
 "propellant exhaustion" failures in the capture grid are not purely a landing-burn
 shortfall.
 
+The RTLS profile spends only **15.887 kg** on the same booster (recorded under
+**RCS telemetry attribution**). Its boostback burn lights immediately after
+separation, so the gimbal can flip the stage; the downrange profile has no burn
+until 70 km and leaves the whole flip to the cluster. That contrast is consistent
+with the mechanism above and is a measured difference between the two profiles,
+not a proven decomposition.
+
 ### The entry burn lights while the stage is still 135° off retrograde
 
 The burn gate is altitude/velocity only; the attitude law is the only alignment
