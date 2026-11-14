@@ -21,7 +21,7 @@ use crate::domain::value_objects::launch_site_coordinates::LaunchSiteCoordinates
 use crate::infrastructure::bevy_adapters::entity_components::PlanetComponent;
 use crate::infrastructure::bevy_adapters::ephemeris::EphemerisSnapshot;
 use bevy::ecs::query::QueryData;
-use bevy::log::info;
+use bevy::log::{debug, info};
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
@@ -153,6 +153,7 @@ pub fn update_drone_ship_landing_targets(
 #[derive(QueryData)]
 #[query_data(mutable)]
 pub struct GuidanceAccess {
+    pub entity: Entity,
     pub binding: &'static RocketPlanetBinding,
     pub dynamics: &'static RocketPhysicsState,
     pub geometry: &'static RocketGeometry,
@@ -267,9 +268,12 @@ pub fn guidance_system(
             // A deck is the landing surface. Terrain radar altitude over the
             // ocean measures the sea floor several kilometres below, which
             // ignites the terminal burn far too late. Deck-relative altitude is
-            // the same frame deck contact resolves in.
-            (position_m - autopilot.target_landing_position_m)
-                .dot(up_dir)
+            // the same frame and lower-extent point deck contact resolves in.
+            // Center altitude would delay the flare by half a booster length.
+            let contact_position_m =
+                position_m + rocket.dynamics.orientation * access.geometry.lower_extent_body_m();
+            (contact_position_m - autopilot.target_landing_position_m)
+                .dot(autopilot.target_landing_position_m.normalize())
                 .max(0.0)
         } else if collision.radar_altitude_m.is_finite() {
             collision.radar_altitude_m.max(0.0)
@@ -906,6 +910,36 @@ pub fn guidance_system(
             }
         }
 
+        // Opt-in, simulation-time sampled guidance evidence. This observes the
+        // authoritative state and commands without affecting the controller.
+        if matches!(
+            autopilot.mode,
+            AutopilotMode::PoweredDescent | AutopilotMode::Landing
+        ) && !matches!(
+            *mission_state,
+            RocketMissionState::Landed | RocketMissionState::Crashed
+        ) && sim_time.sim_time_s.rem_euclid(1.0) < dt
+        {
+            debug!(
+                target: "rocket_landing",
+                entity = ?access.entity,
+                t_s = sim_time.sim_time_s,
+                sequence = ?autopilot.landing_burn_sequence,
+                altitude_m = radar_altitude_m,
+                vertical_speed_mps = surface_relative_velocity_mps.dot(up_dir),
+                lateral_speed_mps = surface_relative_velocity_mps.cross(up_dir).length(),
+                lateral_error_m = (autopilot.target_landing_position_m - position_m).cross(up_dir).length(),
+                actual_tilt_deg = (rocket.dynamics.orientation * DVec3::Y).angle_between(up_dir).to_degrees(),
+                target_tilt_deg = (commands.target_attitude * DVec3::Y).angle_between(up_dir).to_degrees(),
+                attitude_error_deg = (rocket.dynamics.orientation * DVec3::Y).angle_between(commands.target_attitude * DVec3::Y).to_degrees(),
+                angular_speed_radps = rocket.dynamics.angular_velocity_radps.length(),
+                throttle_cmd = commands.throttle_cmd,
+                throttle = propulsion.throttle,
+                propellant_kg = available_propellant_kg(propulsion),
+                "terminal guidance sample"
+            );
+        }
+
         // Reentry-corridor mission state receives a bank-angle command.
         if *mission_state == RocketMissionState::ReentryCorridor
             && autopilot.mode == AutopilotMode::Off
@@ -1159,6 +1193,61 @@ mod tests {
         });
         app.add_systems(Update, guidance_system);
         app
+    }
+
+    #[test]
+    fn deck_flare_uses_lower_extent_clearance_like_terrain() {
+        for tilt_rad in [0.0_f64, 0.4] {
+            let mut app = insertion_app();
+            let deck = app.world_mut().spawn_empty().id();
+            let target = DVec3::X * 6_371_000.0;
+            let attitude = roll_preserving_attitude_from_direction(
+                DVec3::new(tilt_rad.cos(), tilt_rad.sin(), 0.0),
+                DQuat::IDENTITY,
+            );
+            let position = target + DVec3::X * (5.0 + 35.0 * tilt_rad.cos());
+            let mut stages = Vec::new();
+            for on_deck in [false, true] {
+                let stage = spawn_descent_rocket(
+                    &mut app,
+                    position,
+                    -DVec3::X * 10.0,
+                    target,
+                    RocketMissionState::Landing,
+                    AutopilotMode::Landing,
+                    5.0,
+                );
+                app.world_mut()
+                    .get_mut::<RocketPhysicsState>(stage)
+                    .unwrap()
+                    .dynamics
+                    .orientation = attitude;
+                app.world_mut()
+                    .entity_mut(stage)
+                    .insert(RocketFlightConditions::from_sample(FlightConditions {
+                        atmosphere_relative_velocity_mps: -DVec3::X * 10.0,
+                        airspeed_mps: 10.0,
+                        ..default()
+                    }));
+                if on_deck {
+                    app.world_mut()
+                        .entity_mut(stage)
+                        .insert(DroneShipLandingTarget {
+                            drone_ship: deck,
+                            prediction_horizon_s: 0.0,
+                            deck_contact: false,
+                        });
+                }
+                stages.push(stage);
+            }
+            app.update();
+            let pad = app.world().get::<RocketCommands>(stages[0]).unwrap();
+            let deck = app.world().get::<RocketCommands>(stages[1]).unwrap();
+            assert!(
+                (pad.throttle_cmd - deck.throttle_cmd).abs() < 1e-6,
+                "the same 5 m contact clearance must command the same flare"
+            );
+        }
     }
 
     /// Build a state exactly on the orbit with the given apsides. The radial

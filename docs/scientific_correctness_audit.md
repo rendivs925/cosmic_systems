@@ -892,7 +892,9 @@ or GAP in the scope where it is untested or unflown.
 
 ## Recovery deck and downrange entry profile
 
-**Status: IMPLEMENTED and measured; a deck touchdown is not VERIFIED.** The
+**Historical status at the deck introduction: IMPLEMENTED and measured.** A
+specific 15 t deck landing is now VERIFIED below under **Deck touchdown
+verification — 2026-11-14**. The
 recovery target can now be a body-fixed sea-surface deck supplied with
 `--recovery-deck <latitude>,<longitude>`. The deck is a simulation asset, not a
 presentation prop:
@@ -930,7 +932,97 @@ that energy. This is the same lift/crossflow gap recorded in residual 7 and the
 SC-03 residuals, not a tuning problem. The committed vehicle configuration stays
 at the 15 t reserve; 25 t is an experiment and is not committed.
 
-## Terminal recovery revalidation — 2026-11-14
+## Deck touchdown verification — 2026-11-14
+
+**VERIFIED for the specified headless scenario, not the general recovery
+envelope.** Two independent runs (debug trace enabled, then disabled) produce
+identical recovery summaries and remain `Landed` through T+656.25 s.
+
+### Defects corrected
+
+1. Terminal gimbal allocation used requested throttle while actuation applied
+   slew-limited throttle. During the retrograde-to-terminal handover the request
+   was ~0.10 while physical throttle was ~0.34. Allocation now shares the exact
+   upcoming throttle calculation with actuation, including the selected engine
+   envelope. A fixed-system test without RCS verifies delivered gimbal torque
+   against requested torque in both increasing and decreasing throttle slews.
+   Other phases retain their existing allocation policy; actuation itself is
+   unchanged. The flight still missed with this fix alone.
+2. Deck guidance used cylinder-center altitude, but contact uses the rotated
+   lower extent. A nearby deck-placement trial crossed the real deck at
+   10.42 m/s before the 15 m flare had begun, with 937 kg still aboard. Guidance
+   now projects the **same lower-extent point onto the same deck normal** as the
+   contact solver. A regression compares pad and deck flare commands at equal
+   clearance, including a tilted vehicle. This fixes the geometric delay rather
+   than retuning a flare constant or moving the contact plane.
+
+An opt-in `rocket_landing` DEBUG trace samples authoritative clearance, lateral
+error/speed, actual/commanded tilt, attitude error, throttle and fuel once per
+simulation second with an entity identifier. Enable with
+`RUST_LOG=info,rocket_landing=debug`. It adds no force or guidance state.
+
+### Flight evidence and limits
+
+```sh
+cargo build --release --features dem
+RUST_LOG=info target/release/headless_scenario --site starbase --recovery-deck 25.53904,-88.40209 --steps 42000 --scenario landing-deck-repeat
+```
+
+| touchdown quantity | measured value |
+| --- | ---: |
+| vertical contact speed | 1.599416843 m/s |
+| lateral contact speed | 0.744937688 m/s |
+| tilt | 10.097305882° |
+| scorecard distance to target | 11.228018313 m |
+| remaining recovery propellant | 667.612061 kg |
+| final recovery mass | 26,257.843279 kg |
+| final state | `Landed`, ground contact `Landed`, angular speed 0 rad/s |
+
+The existing deck extent, touchdown criteria and landing-gear energy-capacity
+check accept this contact. No thresholds were relaxed. The final inertial speed
+is ~419.19 m/s because the landed vehicle co-rotates with Earth; it is not a
+deck-relative landing speed. Guidance and contact continue to use physical state.
+
+Deck position is a mission input, not a fitted physics coefficient. Three nearby
+placements were tested after the throttle fix (25.53904/−88.40209,
+25.53902/−88.40232, 25.53897/−88.40277): the first crossed the deck but crashed,
+the other two missed. The clearance fix was then tested at that first placement.
+The previously recorded deck at 25.538992/−88.402547 was also re-flown with both
+fixes: it now crosses the deck with 266.267609 kg left, but **crashes** at
+1.534015419 m/s vertical, 2.904968550 m/s lateral and 17.117435784° tilt. This
+nearby counterexample limits the verification claim: lateral/attitude convergence
+and placement robustness remain GAPs. No universal landing capability is claimed.
+
+The committed reserve remains 15 t. SC-01 retro-thrust, drag, lift, engine limits,
+landing criteria and vehicle configuration are unchanged. The successful run's
+~668 kg margin is measured for this scenario, not a certified operational reserve.
+Water-surface impact, entry-lift/flight-path fidelity, RCS station/tank fidelity,
+unattributed RCS summary and SC-06 immutable-source promotion remain open.
+
+RTLS was deliberately re-flown for 345,600 ticks with no deck: impact remains
+186.154696360 m/s vertical, 31.822342106 m/s lateral, 8.726413347° tilt,
+706,186.117161 m miss and zero fuel. Rounded impact figures and primary vehicle
+end state match the prior flight; final wreck motion differs slightly, so a
+bitwise-identical whole RTLS trajectory is not claimed. Primary final mass is
+23,858.331 kg and the accepted orbit remains 201.178314 × 199.975904 km.
+Vehicle, terrain and kernel hashes are the same as the preceding revalidation.
+Committed regression artifacts and tolerances remain unchanged and pass.
+
+### Validation for the touchdown correction
+
+- `cargo fmt --check`, both checks (all-targets with `dem`, no-default-features),
+  and `cargo clippy --all-targets --features dem -- -D warnings`: PASS.
+- `cargo test --features dem`: **1,268 library tests passed**, two ignored.
+- `cargo test --no-default-features`: **1,216 library tests passed**, two ignored.
+- `openspec validate --all --strict`: 43 items pass.
+- `cargo build --release --features dem`: PASS.
+- Release solar/craft/rocket smoke, 15 s each: exit 124, no ERROR/panic matches.
+- Debug `cargo run`, `cargo run -- craft`, `cargo run -- rocket`, 15 s each:
+  each creates its mode window, exits 124 and has no ERROR/panic matches.
+- Headless successful deck repeat, nearby failed deck and RTLS: completed;
+  measurements above distinguish a landing from completed execution.
+
+## Earlier terminal recovery revalidation — 2026-11-14
 
 **Status: IMPLEMENTED and regression-tested; successful full-flight recovery is
 still a GAP.** This section supersedes the earlier deck-contact interpretation

@@ -1,7 +1,7 @@
 # Progress dashboard
 
 Snapshot date: 2026-11-14.
-Recovery checkpoint: this change, based on `a41bf5d`.
+Recovery checkpoint: this change, based on `bc30c4d`.
 This table describes the 45 tasks in `MASTER_ROADMAP.md` — not the whole
 repository and not a percentage of "the simulator being finished". Many tasks are
 small slices; a low percentage here means "little of *this realism programme* is
@@ -63,14 +63,15 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | this change |
 | `cargo check --no-default-features` | PASS (existing feature-disabled warnings) | this change |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | this change |
-| `cargo test --features dem` | library 1266 passed, 0 failed, 2 ignored; other targets pass | this change |
-| `cargo test --no-default-features` | library 1214 passed, 0 failed, 2 ignored | this change |
+| `cargo test --features dem` | library 1268 passed, 0 failed, 2 ignored; other targets pass | this change |
+| `cargo test --no-default-features` | library 1216 passed, 0 failed, 2 ignored | this change |
 | `openspec validate --all --strict` | 43 passed, 0 failed | this change |
 | `cargo build --release --features dem` | PASS | this change |
 | release three-mode smoke (15 s each) | PASS — all three exit 124, no ERROR/panic matches; startup only | this change |
 | default `cargo run` three-mode smoke (15 s each) | PASS — all three create mode windows, exit 124, no ERROR/panic matches | this change |
 | headless Falcon 9 / RTLS re-flight (5,400 s) | accepted 201.178314 × 199.975904 km, final primary mass 23,858.331 kg; recovery crash 186.154696 m/s vertical, 31.822342 m/s lateral, 8.726413° tilt, 706,186.117161 m miss, 0 kg recovery propellant; prior rounded impact figures confirmed; RCS summary lacks entity attribution | this change |
-| downrange deck flight (committed 15 t, 656.25 s) | deck 25.538992, −88.402547; sea-floor crash 166.696370 m/s vertical, 41.601202 m/s lateral, 15.450160° tilt; scorecard miss 86.511053 m, 0 kg propellant; landing GAP | this change |
+| downrange deck landing (committed 15 t, 656.25 s) | **VERIFIED for deck 25.53904, −88.40209**, repeated with identical recovery summary: 1.599417 m/s vertical, 0.744938 m/s lateral, 10.097306° tilt, 667.612061 kg left, final `Landed` | this change |
+| nearby deck counterexample | deck 25.538992, −88.402547; deck crash 1.534015 m/s vertical, 2.904969 m/s lateral, 17.117436° tilt, 266.267609 kg left; placement robustness GAP | this change |
 | visual capture path | works offscreen and windowed; in-app F12 frames captured per mode | `8ea9207` |
 | diagnostic capture matrix | 18 terrain frames at 300 km, 18 at 1,200 km, 7 at 3–70 km; the post-fix roughness/production pair; 9 water-view frames; 2 paired pre/post crops | `903d7c8` |
 | seam harness | `scripts/measure_patch_seam.py` reproduces the pre-fix seam at +4.14/255 and the post-fix seam at −0.04/255 | `903d7c8` |
@@ -126,13 +127,14 @@ frame-pacing harness. See `PERFORMANCE_BASELINES.md`.
 
 ## Next task
 
-**Recovery extension (2026-11-14):** persistent coast → retrograde → terminal
-sequencing and deck-plane contact rejection are regression-tested. Temporary
-diagnostics are removed. Full-flight landing remains a GAP: the committed 15 t
-deck case misses and depletes fuel. The earlier deck-crash claim used a gate
-that could capture a sea-floor impact and is superseded. See the current
-revalidation section of `docs/scientific_correctness_audit.md` for commands,
-provenance, reserve decision and the newly identified RCS-summary attribution GAP.
+**Recovery extension (2026-11-14):** one specified 15 t full-flight deck landing
+is now VERIFIED after fixing slew-aware gimbal allocation and lower-extent deck
+clearance. A nearby placement still crashes on tilt, so convergence robustness
+remains open. The earlier deck-crash claim used a gate that could capture a
+sea-floor impact and is superseded. See **Deck touchdown verification** in
+`docs/scientific_correctness_audit.md` for the repeat run, counterexample,
+provenance and reserve limits. An opt-in 1 Hz DEBUG trace now supports repeatable
+landing analysis; temporary environment-switched diagnostics remain removed.
 The older scientific-extension narrative below describes historical measurements.
 
 **The realism programme is complete.** All 45 tasks are VERIFIED. The two former

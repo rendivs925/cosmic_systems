@@ -8,7 +8,7 @@ The entry point for "what is going on here". Open this first.
 * Timings: [`PERFORMANCE_BASELINES.md`](PERFORMANCE_BASELINES.md)
 * Task → requirement mapping: [`OPENSPEC_MAP.md`](OPENSPEC_MAP.md)
 
-Snapshot: 2026-11-14. Recovery checkpoint: this change, based on `a41bf5d`.
+Snapshot: 2026-11-14. Recovery checkpoint: this change, based on `bc30c4d`.
 
 ---
 
@@ -27,20 +27,26 @@ and a measurement path that captures frames without a swapchain.
 
 ## What is currently being built?
 
-**Recovery remains IMPLEMENTED, not flight-verified.** One shared terminal law
-now has persistent coast → retrograde → terminal sequencing and bounded deck-plane
-contact. Temporary diagnostics are removed. The full gate passes: library counts
-are **1,266 with `dem` / 1,214 without**, two ignored each; strict Clippy,
+**One 15 t full-flight deck landing is VERIFIED.** The deck at terrain-radial
+25.53904, −88.40209 lands twice with identical recovery summaries: **1.599 m/s
+vertical, 0.745 m/s lateral, 10.097° tilt, 667.612 kg fuel left**, and stays Landed
+through T+656.25 s. Fixes align terminal gimbal allocation with slewed throttle
+and deck guidance clearance with the physical lower extent. One shared terminal
+law remains; physics coefficients and landing criteria were not tuned.
+
+The full gate passes: library counts
+are **1,268 with `dem` / 1,216 without**, two ignored each; strict Clippy,
 OpenSpec, release build and three 15 s mode smoke runs pass. Minimal test apps
 still emit logger/asset-loader messages; the smoke logs have no ERROR/panic matches.
 
-The 15 t deck flight still misses and crashes at the sea floor (166.696 m/s
-vertical, 41.601 m/s lateral, 15.450° tilt, 86.511 m scorecard miss, zero fuel).
+The nearby deck at 25.538992, −88.402547 still crashes on deck at 17.117° tilt
+with 266.268 kg left. Placement robustness remains a GAP; the success is specific
+to the verified mission input, not a general recovery-envelope claim.
 The 5,400 s RTLS re-flight confirms the prior 186.155 m/s / 706.186 km crash
 and 201.178314 × 199.975904 km primary orbit. Regression artifacts and tolerances
-are unchanged. Reserve stays 15 t; lateral convergence and landing fuel margin
+are unchanged. Reserve stays 15 t; lateral convergence and fuel-margin robustness
 remain GAPs. RCS-summary entity attribution also needs correction before comparing
-its fuel numbers. See the audit's **Terminal recovery revalidation — 2026-11-14**.
+its fuel numbers. See the audit's **Deck touchdown verification — 2026-11-14**.
 
 The following describes the earlier realism-programme checkpoints.
 The five deferred slices — VG-03 foliage wind, CL-05 cell-size spectrum, CL-06

@@ -80,7 +80,13 @@ pub fn control_system(
             RocketMissionState::PoweredDescent | RocketMissionState::Landing
         );
         let gimbal_throttle = if terminal_descent {
-            commands.throttle_cmd
+            actuated_throttle(
+                propulsion.throttle,
+                commands.throttle_cmd,
+                autopilot.actuation.max_throttle_slew_per_s,
+                sim_time.fixed_timestep_f32(),
+                stage_throttle_envelope(selected_engines),
+            )
         } else {
             propulsion.throttle
         };
@@ -143,6 +149,24 @@ pub fn control_system(
     }
 }
 
+/// Upcoming physical throttle, shared by terminal gimbal allocation and
+/// actuation. Allocating at the requested throttle over-drives torque during a
+/// throttle-down slew, precisely when the landing burn changes attitude.
+fn actuated_throttle(
+    current: f32,
+    target: f32,
+    slew_per_s: f32,
+    dt_s: f32,
+    envelope: (f32, f32),
+) -> f32 {
+    let slewed = limit_throttle_slew(current, target, slew_per_s, dt_s);
+    if target <= 0.0 {
+        slewed
+    } else {
+        clamp_throttle_range(slewed, envelope.0, envelope.1)
+    }
+}
+
 /// Apply actuator slew and mechanical limits to guidance-control commands.
 #[allow(clippy::type_complexity)]
 pub fn actuation_system(
@@ -185,12 +209,6 @@ pub fn actuation_system(
             continue;
         }
         let limits = autopilot.actuation;
-        let slewed = limit_throttle_slew(
-            propulsion.throttle,
-            commands.throttle_cmd,
-            limits.max_throttle_slew_per_s,
-            dt,
-        );
         let envelope = propulsion
             .vehicle
             .stages
@@ -199,11 +217,13 @@ pub fn actuation_system(
                 stage_throttle_envelope(engine_subset(&stage.engines, selected_count(selection)))
             })
             .unwrap_or((0.0, 1.0));
-        propulsion.throttle = if commands.throttle_cmd <= 0.0 {
-            slewed
-        } else {
-            clamp_throttle_range(slewed, envelope.0, envelope.1)
-        };
+        propulsion.throttle = actuated_throttle(
+            propulsion.throttle,
+            commands.throttle_cmd,
+            limits.max_throttle_slew_per_s,
+            dt,
+            envelope,
+        );
         let run_commanded = commands.throttle_cmd > 0.0 && propulsion.throttle > 0.0;
         let stage_index = propulsion.active_stage as u32;
         let (started, stopped) =
@@ -367,6 +387,99 @@ fn write_engine_lifecycle_events(
 mod tests {
     use super::*;
     use crate::domain::entities::rocket::Rocket;
+    use crate::domain::services::guidance::roll_preserving_attitude_from_direction;
+    use crate::domain::services::rocket_dynamics::RocketDynamicsState;
+    use bevy::math::{DMat3, DQuat};
+    use bevy::prelude::{App, IntoScheduleConfigs, MinimalPlugins, Update};
+
+    #[test]
+    fn terminal_gimbal_torque_uses_slewed_throttle_without_rcs() {
+        for (initial_throttle, target_throttle) in [(0.8, 0.1), (0.1, 0.8)] {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            app.insert_resource(SimulationTime::new(1.0 / 64.0));
+            app.add_message::<EngineIgnitionEvent>();
+            app.add_message::<EngineCutoffEvent>();
+            app.add_systems(Update, (control_system, actuation_system).chain());
+            let mut propulsion = recoverable_propulsion();
+            propulsion.throttle = initial_throttle;
+            for engine in &mut propulsion.vehicle.stages[0].engines {
+                engine.state = EngineState::Running;
+            }
+            let target_attitude = roll_preserving_attitude_from_direction(
+                DVec3::new(0.0, 1.0, 0.001),
+                DQuat::IDENTITY,
+            );
+            let inertia_diag = DVec3::splat(1.0e6);
+            let autopilot = RocketAutopilot::default();
+            let mut integral = DVec3::ZERO;
+            let expected = control_torque_body(
+                target_attitude,
+                DQuat::IDENTITY,
+                DVec3::ZERO,
+                inertia_diag,
+                &autopilot.gains,
+                &mut integral,
+                1.0 / 64.0,
+            );
+            let geometry = RocketGeometry {
+                radius_m: 1.85,
+                height_m: 70.0,
+                lower_extent_y_m: -35.0,
+            };
+            let origin = propulsion
+                .active_stage_origin_in_stack_m(geometry.height_m)
+                .unwrap();
+            let entity = app
+                .world_mut()
+                .spawn((
+                    RocketCommands {
+                        target_attitude,
+                        throttle_cmd: target_throttle,
+                        ..Default::default()
+                    },
+                    RocketPhysicsState {
+                        dynamics: RocketDynamicsState::new(
+                            DVec3::X * 6_371_100.0,
+                            DVec3::ZERO,
+                            DQuat::IDENTITY,
+                            30_000.0,
+                            DMat3::from_diagonal(inertia_diag),
+                            DVec3::ZERO,
+                        ),
+                    },
+                    propulsion,
+                    geometry,
+                    RocketFlightConditions::default(),
+                    autopilot,
+                    RocketMissionState::Landing,
+                    TorqueAccumulator::default(),
+                ))
+                .id();
+            app.update();
+            let applied = app.world().get::<RocketPropulsion>(entity).unwrap();
+            let pressure = app
+                .world()
+                .get::<RocketFlightConditions>(entity)
+                .unwrap()
+                .ambient_pressure_pa;
+            let actual = stage_gimbal_torque_body(
+                &applied.vehicle.stages[0].engines,
+                origin,
+                DVec3::ZERO,
+                applied.throttle,
+                pressure,
+                f64::from(applied.gimbal_pitch_rad),
+                f64::from(applied.gimbal_yaw_rad),
+            );
+            assert!(
+                (applied.throttle - target_throttle).abs() > 0.1,
+                "fixture must exercise an unfinished slew"
+            );
+            assert!((actual - expected).length() / expected.length() < 1e-4,
+                "physical gimbal torque must match allocation during slew: {actual:?} vs {expected:?}");
+        }
+    }
 
     fn recoverable_propulsion() -> RocketPropulsion {
         let vehicle = Rocket::falcon9_test_fixture();
