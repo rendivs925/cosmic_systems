@@ -71,6 +71,12 @@ its own limits silently. Attitude is not the problem — the documented SC-01
 retro-thrust correlation is, and the vehicle flies the ballistic track with no
 commanded lift.
 
+An entry lift trim was attempted too, since the normal-force model gives ~16 m/s²
+of authority at peak dynamic pressure. Both variants moved the stage 2.1–2.6 km
+off the ballistic track, so the terminal never ignited. Reverted rather than
+tuned: refining it would mean iterating gains until decks land, which needs a
+reference entry trajectory to be honest.
+
 The alignment fix was also implemented and measured rather than assumed: gating
 descent on lateral closing time turns the 25 t lateral crash into a clean
 landing, but at 15 t it costs 200–400 kg and loses two of nine grid placements.

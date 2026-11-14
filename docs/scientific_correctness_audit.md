@@ -902,7 +902,7 @@ path itself.
 | --- | --- | --- |
 | Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2 | Entry energy |
 | Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
-| Capture window | fixed ballistic track, no commanded lift; lateral authority ~16 m/s² unused | Capture envelope |
+| Capture window | fixed ballistic track, no commanded lift; a naive lift trim moved the stage km off track (see Entry lift trim) | Capture envelope |
 | Reserve trade | 25 t shifts the track ~92 km and still fails on lateral speed | Reserve trade |
 | Alignment vs fuel | gating descent on alignment lands the heavy case but costs 200–400 kg at 15 t | Alignment-gated descent |
 | Water model | sea-surface arrest only; no splashdown hydrodynamics | Water-surface impact |
@@ -1123,6 +1123,47 @@ exactly the ~50 m window measured above. Using the existing lateral
 normal-force model to trim a few degrees of alpha is the only guidance-side way
 to widen it, and that is a new flight law rather than a defect fix, so it is not
 added here.
+
+## Entry lift trim: attempted, not adopted — 2026-11-14
+
+**Experiment.** With ~16 m/s² of normal-force authority available at peak dynamic
+pressure, a bounded entry trim should be able to steer the ground track. One was
+implemented by inverting the existing normal-force model: command a cross-range
+acceleration (bounded at 0.5 g, 100 s time constant), divide by
+`q · C_n · A / m` to get a trim angle, cap it at 10°, and tilt the retrograde
+attitude along the cross-range axis by that angle.
+
+Two variants were flown, both at the committed 15 t configuration:
+
+| variant | outcome |
+| --- | --- |
+| cross-range axis from air-relative velocity | crash 2,128 m from the deck, 4,260 kg unused |
+| axis from inertial ground track (≥50 m/s heading) | crash 2,565 m from the deck, 4,161 kg unused |
+
+Both moved the stage **kilometres** off the ballistic track instead of a few
+hundred metres. The terminal law then never ignites — its stopping-distance gate
+sees a target beyond reach — so the stage crashes with propellant still aboard.
+Deck placement barely changed the result (four placements within 120 m of each
+other all crashed at 215.5 m/s), which shows the miss was created during entry,
+not at the deck.
+
+**Decision: not adopted, reverted.** The committed entry law is unchanged and the
+verified deck landing reproduces exactly (1.338214 m/s vertical, 625.55279 kg
+left).
+
+Why this stops here rather than being tuned: the trim is a genuine feedback law
+whose authority grows with `q²`-like scaling, and the observed excursion is
+consistent with a systematic bias rather than a mis-set gain — the commanded
+acceleration integrates over more than a minute of entry. Refining it would mean
+iterating gains and schedules until decks land, which is exactly the "tune until
+the demo works" pattern this project forbids. A sound version needs a properly
+conditioned steering frame, a trim schedule tied to dynamic pressure and an
+independent validation case (a known entry range from a reference trajectory),
+none of which exists here.
+
+Recording it is still useful: it quantifies the trap. Lift authority at peak `q`
+is real, but using it without a reference turns a 50 m placement tolerance into a
+kilometre-scale error.
 
 ## Alignment-gated descent: measured, not adopted — 2026-11-14
 
