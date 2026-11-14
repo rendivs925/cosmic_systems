@@ -906,7 +906,7 @@ path itself.
 | Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2; the 70 km burn ignites 135° off retrograde and adds 49 m/s before removing 334 | Entry energy |
 | Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
 | Capture window | fixed ballistic track, no commanded lift; a naive lift trim moved the stage km off track (see Entry lift trim) | Capture envelope |
-| Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin | Coast attitude limit cycle |
+| Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin; a braking + deadband attempt is recorded and was not adopted | Coast attitude limit cycle |
 | Reserve trade | 25 t shifts the track ~92 km and still fails on lateral speed | Reserve trade |
 | Alignment vs fuel | gating descent on alignment lands the heavy case but costs 200–400 kg at 15 t | Alignment-gated descent |
 | Water model | sea-surface arrest only; no splashdown hydrodynamics | Water-surface impact |
@@ -1573,8 +1573,59 @@ with realistic authority. Both are control-design changes, not gain tweaks:
 either one changes the attitude timeline through entry, which moves the ballistic
 track and therefore re-places every deck and re-opens the three verified
 landings. Iterating `kp`/`kd` until the oscillation disappears is exactly the
-gain-tuning this project forbids. The limit is recorded with its measured
-mechanism instead.
+gain-tuning this project forbids. The first attempt at the first remedy is
+recorded next; it did not pay for itself.
+
+## Saturation-aware braking and an RCS deadband: attempted, not adopted — 2026-11-14
+
+**Experiment.** Two pieces were added, both gated on "engine off and dynamic
+pressure below 100 Pa", so ascent and every powered phase kept the existing law:
+
+1. `saturated_braking_torque`: the braking half of a time-optimal
+   double-integrator slew. When the remaining angle is smaller than
+   `ω²/(2α)`, command the available deceleration along the error axis instead of
+   the PID's over-large acceleration. `α` is the cluster authority over the
+   largest inertia component, so the torque is bounded per axis by construction.
+2. A limit-cycle deadband of 0.5° and 0.01 rad/s, so an on/off cluster shuts down
+   inside a band it cannot null, instead of firing at every small error.
+
+Three domain tests were written for the braking function (engagement condition,
+per-axis bound, and a closed-loop double integrator that stops within 1 % of the
+theoretical `2·sqrt(θ/α)` without the limit cycle) and passed.
+
+**Measured, deck flight 25.53904, −88.40209:**
+
+| quantity | committed | brake + deadband |
+| --- | ---: | ---: |
+| coast attitude error | 0–163°, four excursions | settles to ~10° by T+215 s, then 10–43° |
+| RCS draw, recovering stage | 504.803 kg | **461.530 kg** |
+| entry-burn ignition / cutoff | 2,680 → 2,393 m/s | 2,680 → **2,246 m/s** |
+| entry-burn propellant | 10.255 t | **11.010 t** |
+| propellant at burn cutoff | 4,247 kg | **3,528 kg** |
+| outcome | deck landing, 625.553 kg left | water impact 1.9 km off, 213.3 m/s, 3,528 kg aboard |
+
+**Why it is a net loss.** The braking curve did what it was designed to do: the
+150° overshoots are gone. But the RCS draw barely moved, because the loop still
+asks for far more acceleration than the cluster can deliver at *any* error above
+about 0.006°, so the deadband is almost never reached and the thrusters stay
+saturated on small errors. The aligned burn is genuinely more efficient —
+Δv per kilogram rose from 0.0280 to 0.0394 (m/s)/kg — but the burn is
+altitude-gated (70→55 km), so the slower entry stays in the band longer and the
+burn spends 719 kg more. The stage then arrives at the powered-descent gate 1.9 km
+off the old deck, the terminal stopping-distance gate never lights, and it splashes
+with the whole post-burn reserve.
+
+**Decision: reverted.** Both files were restored to the committed state; the
+verified landing reproduces exactly (1.338214 m/s vertical, 625.553 kg). The
+experiment did not address the dominant term (the loop bandwidth) and made the
+propellant budget worse, so adopting it would have required re-placing the deck to
+buy back a loss.
+
+The next sound attempt is not another bolt-on: either a cascaded attitude→rate
+loop whose rate command is bounded by the delivered acceleration, or an
+authority-scheduled bandwidth so the loop never asks for acceleration the cluster
+cannot produce. Either is a control redesign with its own validation, and either
+moves the track, so it stays a design decision rather than an autonomous change.
 
 ## Earlier terminal recovery revalidation — 2026-11-14
 
