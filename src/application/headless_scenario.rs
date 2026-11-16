@@ -615,4 +615,76 @@ mod tests {
         assert_eq!(analysis.len(), 1);
         assert!(analysis[0].result.is_ok());
     }
+
+    /// The verified deck landing is the headline recovery result, so the suite
+    /// must be able to reproduce it, not only a manually typed command line.
+    ///
+    /// Requires the Earth DEM payload the committed flight used. Without it the
+    /// procedural fallback is a different surface, so the test returns early
+    /// rather than asserting a landing on geometry that was never verified.
+    #[cfg(feature = "dem")]
+    #[test]
+    fn committed_deck_landing_reproduces_its_verified_touchdown() {
+        let dem_root = std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid");
+        let starbase_root =
+            std::path::Path::new("assets/large_files/terrain/earth_elevation_pyramid_starbase");
+        if !dem_root.exists() || !starbase_root.exists() {
+            return;
+        }
+
+        let artifact = run_headless_scenario_artifact(HeadlessScenario {
+            scenario_id: "deck-landing-regression".into(),
+            launch_site: PredefinedLaunchSite::Starbase,
+            recovery_deck: Some(
+                RecoveryDeckCoordinates::try_new(25.539_04, -88.402_09)
+                    .expect("verified deck coordinate"),
+            ),
+            fixed_steps: 42_000,
+            ..HeadlessScenario::default()
+        })
+        .expect("deck flight runs");
+
+        let touchdown = artifact
+            .events
+            .iter()
+            .find(|event| event.event_type == Some(SimulationEventType::Touchdown))
+            .expect("the verified placement must record a touchdown");
+        assert!(
+            !artifact.events.iter().any(|event| matches!(
+                event.event_type,
+                Some(SimulationEventType::Crash | SimulationEventType::Splashdown)
+            )),
+            "the verified placement must not crash or splash"
+        );
+        assert!(
+            touchdown.simulation_time_s > 500.0,
+            "touchdown at T+{:.1} s is not the recovery-phase landing",
+            touchdown.simulation_time_s
+        );
+
+        // The typed artifact event carries the verdict as text; parsing it here
+        // keeps the verified approach speed under regression instead of only
+        // checking that some touchdown happened.
+        let mut touchdown_detail = touchdown.detail.split_whitespace();
+        let vertical = touchdown_detail
+            .find_map(|field| field.strip_prefix("vertical_speed_mps="))
+            .expect("touchdown detail carries the vertical speed")
+            .parse::<f64>()
+            .expect("vertical speed is numeric");
+        let lateral = touchdown
+            .detail
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("lateral_mps="))
+            .expect("touchdown detail carries the lateral speed")
+            .parse::<f64>()
+            .expect("lateral speed is numeric");
+        assert!(
+            (0.5..=2.5).contains(&vertical),
+            "touchdown vertical speed {vertical:.3} m/s left the verified band"
+        );
+        assert!(
+            lateral <= 2.5,
+            "touchdown lateral speed {lateral:.3} m/s left the verified band"
+        );
+    }
 }

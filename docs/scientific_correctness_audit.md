@@ -1312,7 +1312,7 @@ That keeps both feature configurations testing the same geometry.
 
 - `cargo fmt --check`, both checks, `cargo clippy --all-targets --features dem --
   -D warnings`: PASS.
-- `cargo test --features dem`: **1,275 library tests passed**, two ignored.
+- `cargo test --features dem`: **1,276 library tests passed**, two ignored.
 - `cargo test --no-default-features`: **1,222 library tests passed**, two ignored.
 - `openspec validate --all --strict`: 43 items pass.
 - `cargo build --release --features dem`: PASS.
@@ -1434,6 +1434,15 @@ All three placements were re-flown on 2026-11-16 after contact logging gained
 six-decimal coordinates (the previous two decimals quantised the reported point
 to about a kilometre). Every summary reproduces the table above to the printed
 digit, so the finer logging changed the record, not the flight.
+
+The landing is now also a regression test,
+`committed_deck_landing_reproduces_its_verified_touchdown`, which flies the first
+placement for 42,000 fixed steps and requires one touchdown, no crash or
+splashdown, a recovery-phase contact time, and the recorded approach band
+(0.5–2.5 m/s vertical, lateral ≤ 2.5 m/s) parsed from the typed event. It returns
+early when the Earth DEM payload is absent, so CI without the dataset skips it
+instead of asserting a landing on the procedural fallback. The suite count rises
+to **1,276 with `dem`**; the no-default count is unchanged at 1,222.
 
 `centre offset` is the scorecard distance from the deck centre to the vehicle
 **centre**, not the footprint test. Contact latches on the rotated lower extent,

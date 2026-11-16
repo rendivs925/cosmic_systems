@@ -63,7 +63,7 @@ Ordered by visible impact, not by ease.
 | `cargo check --all-targets --features dem` | PASS | this change |
 | `cargo check --no-default-features` | PASS (existing feature-disabled warnings) | this change |
 | `cargo clippy --all-targets --features dem -- -D warnings` | PASS | this change |
-| `cargo test --features dem` | library 1275 passed, 0 failed, 2 ignored; other targets pass | this change |
+| `cargo test --features dem` | library 1276 passed, 0 failed, 2 ignored; other targets pass | this change |
 | `cargo test --no-default-features` | library 1222 passed, 0 failed, 2 ignored | this change |
 | `openspec validate --all --strict` | 43 passed, 0 failed | this change |
 | `cargo build --release --features dem` | PASS | this change |
