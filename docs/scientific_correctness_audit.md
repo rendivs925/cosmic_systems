@@ -1430,6 +1430,11 @@ without retuning. The middle placement is the one that crashed at 17.1° tilt
 before the bandwidth change; it now lands at 0.37° tilt with 267 kg left, which
 is the smallest measured margin and the closest to the fuel limit.
 
+All three placements were re-flown on 2026-11-16 after contact logging gained
+six-decimal coordinates (the previous two decimals quantised the reported point
+to about a kilometre). Every summary reproduces the table above to the printed
+digit, so the finer logging changed the record, not the flight.
+
 `centre offset` is the scorecard distance from the deck centre to the vehicle
 **centre**, not the footprint test. Contact latches on the rotated lower extent,
 so a tilted vehicle can show a larger centre offset than its contact point; all
