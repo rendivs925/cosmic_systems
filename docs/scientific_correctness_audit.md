@@ -906,7 +906,7 @@ path itself.
 | Entry energy | peak 284.9 kPa at Mach 5.26 / 13.75 km; SC-01 holds thrust at 0.5 above Mach 6.2; the 70 km burn ignites 135° off retrograde and adds 49 m/s before removing 334 | Entry energy |
 | Declared corridor | flown 11.51 g vs 4 g and 285 kPa vs 50 kPa; the law is not entered by this lane | Entry energy |
 | Capture window | fixed ballistic track, no commanded lift; a naive lift trim moved the stage km off track (see Entry lift trim) | Capture envelope |
-| Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin; a braking + deadband attempt is recorded and was not adopted | Coast attitude limit cycle |
+| Coast attitude | the post-separation flip limit-cycles, saturated on a 5.0e3 N·m cluster against a 1e8 N·m command; 504.8 kg of RCS propellant leaves the main tank, 44.6 % of the touchdown margin; brake + deadband variants cut the draw to 450.9 kg at best and were not adopted | Coast attitude limit cycle |
 | Reserve trade | 25 t shifts the track ~92 km and still fails on lateral speed | Reserve trade |
 | Alignment vs fuel | gating descent on alignment lands the heavy case but costs 200–400 kg at 15 t | Alignment-gated descent |
 | Water model | sea-surface arrest only; no splashdown hydrodynamics | Water-surface impact |
@@ -1576,7 +1576,7 @@ landings. Iterating `kp`/`kd` until the oscillation disappears is exactly the
 gain-tuning this project forbids. The first attempt at the first remedy is
 recorded next; it did not pay for itself.
 
-## Saturation-aware braking and an RCS deadband: attempted, not adopted — 2026-11-14
+## Saturation-aware braking and an RCS deadband: attempted, not adopted — 2026-11-14, re-flown 2026-11-16
 
 **Experiment.** Two pieces were added, both gated on "engine off and dynamic
 pressure below 100 Pa", so ascent and every powered phase kept the existing law:
@@ -1604,28 +1604,48 @@ theoretical `2·sqrt(θ/α)` without the limit cycle) and passed.
 | propellant at burn cutoff | 4,247 kg | **3,528 kg** |
 | outcome | deck landing, 625.553 kg left | water impact 1.9 km off, 213.3 m/s, 3,528 kg aboard |
 
-**Why it is a net loss.** The braking curve did what it was designed to do: the
-150° overshoots are gone. But the RCS draw barely moved, because the loop still
-asks for far more acceleration than the cluster can deliver at *any* error above
-about 0.006°, so the deadband is almost never reached and the thrusters stay
-saturated on small errors. The aligned burn is genuinely more efficient —
-Δv per kilogram rose from 0.0280 to 0.0394 (m/s)/kg — but the burn is
-altitude-gated (70→55 km), so the slower entry stays in the band longer and the
-burn spends 719 kg more. The stage then arrives at the powered-descent gate 1.9 km
-off the old deck, the terminal stopping-distance gate never lights, and it splashes
-with the whole post-burn reserve.
+**Re-flown on its own track.** The 1.9 km miss was a deck-placement artifact, not
+a guidance failure. The splash point measured with six-decimal contact logging is
+25.521658, −88.402271 (the track moved almost purely in latitude; longitude is
+unchanged to 2e-4°). With a deck there, the same build reaches the terminal gate,
+lights, and touches the deck plane at **21.456 m/s vertical, 2.080 m/s lateral,
+0.629° tilt, 21.2 m from the centre, with 0 kg**. The numbers repeat bit-for-bit
+in a second process. Guidance and contact are therefore fine; the whole deficit
+is the **719 kg** the aligned burn spends, worth about 0.6 t of terminal
+propellant.
 
-**Decision: reverted.** Both files were restored to the committed state; the
-verified landing reproduces exactly (1.338214 m/s vertical, 625.553 kg). The
-experiment did not address the dominant term (the loop bandwidth) and made the
-propellant budget worse, so adopting it would have required re-placing the deck to
-buy back a loss.
+**Why the deadband did not rescue it.** Two bands were flown:
 
-The next sound attempt is not another bolt-on: either a cascaded attitude→rate
-loop whose rate command is bounded by the delivered acceleration, or an
-authority-scheduled bandwidth so the loop never asks for acceleration the cluster
-cannot produce. Either is a control redesign with its own validation, and either
-moves the track, so it stays a design decision rather than an autonomous change.
+| RCS control | attitude / rate band | RCS draw | outcome |
+| --- | --- | ---: | --- |
+| braking only | — | 462.094 kg | 21.456 m/s, 0 kg |
+| braking + fixed band | 0.5° / 0.01 rad/s | 461.530 kg | same trajectory; band never reached |
+| braking + derived band | 2.9° / 0.01 rad/s | 450.929 kg | 37.665 m/s, 20.746° tilt, 163 m off, **1,358.741 kg unused** |
+
+The derived band is the distance needed to stop from the rate band at the
+available acceleration, `ω_db²/(2α)`, so it cannot be overshot by its own pulse.
+It still saves only 11 kg. The loop asks for more acceleration than the cluster
+can deliver at *any* error above about 0.006°, so the thrusters run at high duty
+almost continuously; the deadband changes when they shut off, not how hard they
+work. Widening the band also degrades the terminal attitude enough that the
+lateral loop cannot reach the deck (163 m off with 1.36 t still aboard), so it is
+not free.
+
+**Decision: reverted.** Both files were restored; the verified landing reproduces
+exactly (1.338214 m/s vertical, 625.553 kg). The experiment did not address the
+dominant term and made the propellant budget worse. The two facts it establishes
+are worth keeping: the aligned burn is 41 % more efficient per kilogram but costs
+719 kg because the altitude gate keeps the slower stage in the 70→55 km band
+longer, and the RCS overhead is continuous saturated firing, not a deadband
+width.
+
+The next sound attempt is not another bolt-on. It needs both a **cascaded
+attitude→rate loop** whose rate command and torque are independently bounded by
+the delivered acceleration (a rate loop can hold a small duty instead of
+bang-banging), and a **burn schedule that is not purely altitude-gated** — a Δv or
+projected-entry-state target, which is a guidance requirement rather than a
+tuning constant. Each is a design decision with its own validation, and either
+moves the track, so it stays recorded rather than adopted autonomously.
 
 ## Earlier terminal recovery revalidation — 2026-11-14
 

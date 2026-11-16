@@ -67,12 +67,14 @@ are mostly prograde and add 49 m/s before the aligned remainder removes 334 m/s.
 The traces are `RUST_LOG=info,rocket_rcs=debug` and `rocket_entry=debug`; no
 control law or gate was changed and the landing figures are unchanged.
 
-A braking curve plus a 0.5° RCS deadband was then built and flown. It removed the
+A braking curve plus an RCS deadband was then built and flown. It removed the
 150° overshoots and made the aligned burn 41 % more efficient per kilogram, but
-the RCS draw only fell to 461.5 kg because the loop still saturates on small
-errors, and the altitude-gated burn spent 719 kg more. The stage reached the
-terminal gate 1.9 km off the deck and never lit. Reverted and recorded: the
-dominant term is the loop bandwidth, not the braking transition.
+the RCS draw only fell to 450.9 kg at best (two band choices) because the loop
+still fires at high duty on small errors, and the altitude-gated burn spent 719 kg
+more. Re-flown on its own track it does reach the deck, at 21.456 m/s with 0 kg —
+so the guidance is fine and the entire deficit is the burn cost. Reverted and
+recorded: the dominant term is the loop structure, not the braking transition, and
+the burn schedule is the second lever.
 
 Tracing the 25 t case found the mechanism: the terminal law descends without
 checking lateral alignment, so a large arrival error crosses the deck plane ~78 m
