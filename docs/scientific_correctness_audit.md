@@ -1619,6 +1619,18 @@ in a second process. Guidance and contact are therefore fine; the whole deficit
 is the **719 kg** the aligned burn spends, worth about 0.6 t of terminal
 propellant.
 
+**The misalignment is the larger term.** Comparing the two flown burns at the
+same interface speed is what makes the cost visible. The committed burn removes
+287 m/s for 10.255 t (0.0280 (m/s)/kg) because part of its impulse is lateral.
+The aligned burn removes 434 m/s for 11.010 t (0.0394 (m/s)/kg). To remove the
+committed 287 m/s at the aligned efficiency needs about **7.3 t**, so the
+misalignment costs roughly **2.9 t** for the same entry state. That is an
+interpolation between two measured burns, not a third flight, and it is an order
+of magnitude larger than the 0.5 t RCS overhead. Realizing it requires a Δv or
+entry-state burn gate instead of the fixed 70→55 km band; choosing that target is
+the same uncited entry-requirement problem as the corridor, so it is recorded
+rather than adopted.
+
 **Why the deadband did not rescue it.** Two bands were flown:
 
 | RCS control | attitude / rate band | RCS draw | outcome |
