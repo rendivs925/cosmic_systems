@@ -457,7 +457,7 @@ pub fn resolve_ground_contact(
             GroundContact::Landed => {
                 rest.active = true;
                 bevy::log::info!(
-                    "Touchdown at ({lat:.2}, {lon:.2}): descent {:.2} m/s, lateral {:.2} m/s, slope {:.1} deg, tilt {:.1} deg{}",
+                    "Touchdown at ({lat:.6}, {lon:.6}): descent {:.2} m/s, lateral {:.2} m/s, slope {:.1} deg, tilt {:.1} deg{}",
                     -components.normal_mps,
                     components.lateral_mps,
                     sample.slope_deg,
@@ -557,7 +557,7 @@ pub fn resolve_ground_contact(
                             touchdown_vertical_speed_mps: -components.normal_mps,
                         });
                         bevy::log::info!(
-                            "Splashdown at ({lat:.2}, {lon:.2}), vertical speed {:.1} m/s: a water arrival is a crash, not a landing",
+                            "Splashdown at ({lat:.6}, {lon:.6}), vertical speed {:.1} m/s: a water arrival is a crash, not a landing",
                             -components.normal_mps
                         );
                     }
