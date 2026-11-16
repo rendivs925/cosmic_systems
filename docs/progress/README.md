@@ -73,8 +73,11 @@ the RCS draw only fell to 450.9 kg at best (two band choices) because the loop
 still fires at high duty on small errors, and the altitude-gated burn spent 719 kg
 more. Re-flown on its own track it does reach the deck, at 21.456 m/s with 0 kg —
 so the guidance is fine and the entire deficit is the burn cost. Reverted and
-recorded: the dominant term is the loop structure, not the braking transition, and
-the burn schedule is the second lever.
+recorded: the dominant term is the loop structure, not the braking transition.
+Comparing the two flown burns shows the misalignment itself costs about 2.9 t for
+the same entry state, because the committed burn's impulse is partly lateral;
+rescheduling it needs a Δv or entry-state gate, which is the same uncited entry
+requirement as the corridor.
 
 Tracing the 25 t case found the mechanism: the terminal law descends without
 checking lateral alignment, so a large arrival error crosses the deck plane ~78 m
