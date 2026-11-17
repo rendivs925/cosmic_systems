@@ -240,14 +240,14 @@ Android has no keyboard or mouse. The on-screen panel synthesises the same
 needs a second control implementation:
 
 - **Solar**: one-finger drag rotates, pinch dollies, a short tap above the panel
-  selects the body under the finger (reusing the desktop raycast). Panel buttons:
+  selects the body under the finger (reusing the desktop raycast). Buttons:
   `W/A/S/D`, `Up/Down`, `Next` (Tab), `Clear` (Esc), `Time-`/`Time+`.
 - **Craft**: movement, yaw/pitch/roll, boost/brake, camera, reset, time warp.
 - **Rocket**: `Stage` (Space), `Restart` (R), camera, HUD/log toggles, camera
   presets, time warp.
 
-Touches that start inside the lower 45 % panel are ignored by the camera handler,
-so pressing a button never rotates the view.
+Touches that start inside the measured panel area are ignored by the camera
+handler, so pressing a button never rotates the view.
 
 The launch mode defaults to solar and is selectable with an intent extra:
 
@@ -255,6 +255,28 @@ The launch mode defaults to solar and is selectable with an intent extra:
 am start -n com.rendivs925.cosmicsystems/android.app.NativeActivity --es mode rocket
 am start -n com.rendivs925.cosmicsystems/android.app.NativeActivity --es mode craft
 ```
+
+## Mobile UI system
+
+`src/android/theme.rs` is the single source for the mobile interface:
+
+- **Spacing**: 4 dp base scale (`SPACE_1..8`) used for panel padding, gaps,
+  overlay padding and loading layout.
+- **Type**: display 32, title 22, body 16, caption 13, using bundled
+  `assets/fonts/Roboto-Regular.ttf` instead of Bevy's monospace `default_font`.
+- **Touch**: 64×52 dp buttons (above the 48 dp minimum), 8 dp gaps, 12 dp panel
+  padding plus a bottom safe-area allowance.
+- **Colour**: dark surface, raised surface, accent, primary/secondary text with
+  AA contrast.
+- **Safe areas**: the activity uses `Theme.Material.NoActionBar.Fullscreen`, so
+  the status bar is gone; the UI adds conservative top/bottom padding.
+
+The activity declares `sensorLandscape` and a full `configChanges` list, so
+rotation reflows the UI instead of recreating (and restarting) the simulation.
+
+The loading screen has a title/subtitle hierarchy, a progress track and counter,
+and an animated phase label driven by `Time<Real>` (virtual simulation time is
+paused). It has a 30 s timeout, so a missing asset can never leave the app stuck.
 
 ## Current status
 

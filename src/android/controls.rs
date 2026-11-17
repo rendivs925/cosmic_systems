@@ -113,7 +113,8 @@ fn bindings(mode: Mode) -> Vec<(KeyCode, &'static str)> {
     }
 }
 
-fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>) {
+fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>, asset_server: Res<AssetServer>) {
+    let ui_font: Handle<Font> = asset_server.load(FONT_PATH);
     commands
         .spawn((
             Node {
@@ -160,6 +161,7 @@ fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>) {
                     .with_child((
                         Text::new(label),
                         TextFont {
+                            font: ui_font.clone(),
                             font_size: FONT_CAPTION,
                             ..default()
                         },

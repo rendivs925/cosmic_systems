@@ -29,7 +29,8 @@ pub fn install(app: &mut App) {
         .add_systems(Update, (touch_camera_controls, update_frame_readout));
 }
 
-fn spawn_overlays(mut commands: Commands) {
+fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let ui_font: Handle<Font> = asset_server.load(FONT_PATH);
     // FPS pill.
     commands
         .spawn((
@@ -46,6 +47,7 @@ fn spawn_overlays(mut commands: Commands) {
         .with_child((
             Text::new("-- fps"),
             TextFont {
+                font: ui_font.clone(),
                 font_size: FONT_CAPTION,
                 ..default()
             },
@@ -69,6 +71,7 @@ fn spawn_overlays(mut commands: Commands) {
         .with_child((
             Text::new("Drag look · Pinch zoom · Tap select"),
             TextFont {
+                font: ui_font.clone(),
                 font_size: FONT_CAPTION,
                 ..default()
             },

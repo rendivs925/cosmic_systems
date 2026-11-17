@@ -69,6 +69,7 @@ fn begin_loading(
         .collect();
     let total = preload.images.len();
     diagnostics::log(&format!("loading: {total} textures queued"));
+    let ui_font: Handle<Font> = asset_server.load(FONT_PATH);
 
     commands
         .spawn((
@@ -91,6 +92,7 @@ fn begin_loading(
             root.spawn((
                 Text::new("COSMIC SYSTEMS"),
                 TextFont {
+                    font: ui_font.clone(),
                     font_size: FONT_DISPLAY,
                     ..default()
                 },
@@ -99,6 +101,7 @@ fn begin_loading(
             root.spawn((
                 Text::new("Preparing simulation"),
                 TextFont {
+                    font: ui_font.clone(),
                     font_size: FONT_BODY,
                     ..default()
                 },
@@ -134,6 +137,7 @@ fn begin_loading(
             root.spawn((
                 Text::new(format!("0 / {total} textures")),
                 TextFont {
+                    font: ui_font.clone(),
                     font_size: FONT_CAPTION,
                     ..default()
                 },
@@ -147,6 +151,7 @@ fn begin_loading(
             root.spawn((
                 Text::new("Loading textures"),
                 TextFont {
+                    font: ui_font.clone(),
                     font_size: FONT_BODY,
                     ..default()
                 },
@@ -201,7 +206,11 @@ fn update_loading(
         node.width = percent(fraction * 100.0);
     }
     for mut text in &mut progress_labels {
-        text.0 = format!("{resolved} / {total} textures  ({failed} failed)");
+        text.0 = if failed > 0 {
+            format!("{resolved} / {total} textures  ({failed} failed)")
+        } else {
+            format!("{resolved} / {total} textures")
+        };
     }
 
     // Animated phase label: real time keeps moving while virtual time is paused,

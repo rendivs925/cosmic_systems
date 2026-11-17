@@ -2,7 +2,7 @@
 
 [package]
 name = "cosmic_systems"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 default-run = "cosmic_systems"
 
@@ -154,6 +154,10 @@ theme = "@android:style/Theme.Material.NoActionBar.Fullscreen"
 [[package.metadata.android.application.activity]]
 name = "android.app.NativeActivity"
 exported = true
+# The simulator is a landscape experience; keep the activity alive across
+# configuration changes so rotation does not restart the simulation.
+orientation = "sensorLandscape"
+config_changes = "orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection"
 
 [[package.metadata.android.application.activity.meta_data]]
 name = "android.app.lib_name"

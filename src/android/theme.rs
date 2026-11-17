@@ -18,6 +18,9 @@ pub const SPACE_8: f32 = 32.0;
 pub const RADIUS_SM: f32 = 8.0;
 pub const RADIUS_MD: f32 = 12.0;
 
+/// Proportional interface typeface (see assets/fonts/LICENSE.md).
+pub const FONT_PATH: &str = "fonts/Roboto-Regular.ttf";
+
 // Type scale.
 pub const FONT_DISPLAY: f32 = 32.0;
 pub const FONT_TITLE: f32 = 22.0;
