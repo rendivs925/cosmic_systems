@@ -29,6 +29,9 @@ pub struct MobileMode(pub Mode);
 #[derive(Component, Clone, Copy)]
 struct MobileKey(KeyCode);
 
+#[derive(Component)]
+struct PrimaryAction;
+
 #[derive(Resource, Default)]
 struct HeldKeys(Vec<KeyCode>);
 
@@ -63,58 +66,53 @@ pub fn launch_mode() -> Mode {
     }
 }
 
-fn bindings(mode: Mode) -> Vec<(KeyCode, &'static str)> {
+/// Player-facing labels with Unicode symbols and clear verbs.
+/// No developer jargon like "Yaw+" or "Time-".
+fn bindings(mode: Mode) -> Vec<(KeyCode, &'static str, bool)> {
+    // (key, label, is_primary_action)
     match mode {
         Mode::Solar => vec![
-            (KeyCode::KeyW, "Fwd"),
-            (KeyCode::KeyS, "Back"),
-            (KeyCode::KeyA, "Left"),
-            (KeyCode::KeyD, "Right"),
-            (KeyCode::Space, "Up"),
-            (KeyCode::ControlLeft, "Down"),
-            (KeyCode::Tab, "Next"),
-            (KeyCode::Escape, "Clear"),
-            (KeyCode::Comma, "Time-"),
-            (KeyCode::Period, "Time+"),
+            (KeyCode::KeyW, "↑", false),
+            (KeyCode::KeyS, "↓", false),
+            (KeyCode::KeyA, "←", false),
+            (KeyCode::KeyD, "→", false),
+            (KeyCode::Tab, "Next", false),
+            (KeyCode::Escape, "Clear", false),
         ],
         Mode::Craft => vec![
-            (KeyCode::KeyW, "Fwd"),
-            (KeyCode::KeyS, "Back"),
-            (KeyCode::KeyA, "Left"),
-            (KeyCode::KeyD, "Right"),
-            (KeyCode::Space, "Up"),
-            (KeyCode::ControlLeft, "Down"),
-            (KeyCode::KeyQ, "Yaw+"),
-            (KeyCode::KeyE, "Yaw-"),
-            (KeyCode::KeyH, "Pitch+"),
-            (KeyCode::KeyL, "Pitch-"),
-            (KeyCode::KeyJ, "Roll+"),
-            (KeyCode::KeyK, "Roll-"),
-            (KeyCode::ShiftLeft, "Boost"),
-            (KeyCode::KeyV, "Cam"),
-            (KeyCode::KeyB, "Reset"),
-            (KeyCode::Comma, "Time-"),
-            (KeyCode::Period, "Time+"),
-            (KeyCode::Escape, "Menu"),
+            (KeyCode::KeyW, "↑", false),
+            (KeyCode::KeyS, "↓", false),
+            (KeyCode::KeyA, "←", false),
+            (KeyCode::KeyD, "→", false),
+            (KeyCode::Space, "↑↑", false),
+            (KeyCode::ControlLeft, "↓↓", false),
+            (KeyCode::KeyQ, "↺", false),
+            (KeyCode::KeyE, "↻", false),
+            (KeyCode::KeyH, "Pitch +", false),
+            (KeyCode::KeyL, "Pitch −", false),
+            (KeyCode::KeyJ, "Roll +", false),
+            (KeyCode::KeyK, "Roll −", false),
+            (KeyCode::ShiftLeft, "Boost", true),
+            (KeyCode::KeyV, "Cam", false),
+            (KeyCode::KeyB, "Reset", false),
+            (KeyCode::Escape, "Menu", false),
         ],
         Mode::Rocket => vec![
-            (KeyCode::Space, "Stage"),
-            (KeyCode::KeyR, "Restart"),
-            (KeyCode::KeyC, "Cam"),
-            (KeyCode::KeyH, "HUD"),
-            (KeyCode::KeyL, "Log"),
-            (KeyCode::Digit1, "Cam1"),
-            (KeyCode::Digit2, "Cam2"),
-            (KeyCode::Digit3, "Cam3"),
-            (KeyCode::Comma, "Time-"),
-            (KeyCode::Period, "Time+"),
-            (KeyCode::Escape, "Menu"),
+            (KeyCode::Space, "Stage", true), // Primary action: larger, prominent
+            (KeyCode::KeyR, "Restart", false),
+            (KeyCode::KeyC, "Cam", false),
+            (KeyCode::Digit1, "1", false),
+            (KeyCode::Digit2, "2", false),
+            (KeyCode::Digit3, "3", false),
+            (KeyCode::Escape, "Menu", false),
         ],
     }
 }
 
 fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>, asset_server: Res<AssetServer>) {
     let ui_font: Handle<Font> = asset_server.load(FONT_PATH);
+
+    // Panel container with subtle translucency.
     commands
         .spawn((
             Node {
@@ -122,7 +120,7 @@ fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>, asset_server: Res<
                 bottom: px(0),
                 left: px(0),
                 width: percent(100),
-                max_height: percent(45),
+                max_height: percent(40),
                 flex_wrap: FlexWrap::Wrap,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -134,40 +132,56 @@ fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>, asset_server: Res<
                     px(SPACE_3),
                     px(SPACE_3 + SAFE_BOTTOM),
                 ),
-                border: UiRect::top(px(1)),
                 ..default()
             },
-            BackgroundColor(SURFACE),
-            BorderColor::all(TRACK),
+            BackgroundColor(SURFACE_PANEL),
             ControlsPanel,
         ))
         .with_children(|panel| {
-            for (key, label) in bindings(mode.0) {
-                panel
-                    .spawn((
-                        Button,
-                        MobileKey(key),
-                        ControlsButton,
-                        Node {
-                            width: px(TOUCH_WIDTH),
-                            height: px(TOUCH_HEIGHT),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                        BackgroundColor(SURFACE_RAISED),
-                        BorderRadius::all(px(RADIUS_SM)),
-                    ))
-                    .with_child((
-                        Text::new(label),
-                        TextFont {
-                            font: ui_font.clone(),
-                            font_size: FONT_CAPTION,
-                            ..default()
-                        },
-                        TextColor(TEXT_PRIMARY),
-                        TextLayout::new_with_justify(Justify::Center),
-                    ));
+            for (key, label, is_primary) in bindings(mode.0) {
+                let (width, height, bg, radius) = if is_primary {
+                    (
+                        TOUCH_PRIMARY_WIDTH,
+                        TOUCH_PRIMARY_HEIGHT,
+                        SURFACE_PRIMARY,
+                        RADIUS_MD,
+                    )
+                } else {
+                    (TOUCH_WIDTH, TOUCH_HEIGHT, SURFACE_RAISED, RADIUS_SM)
+                };
+
+                let mut button = panel.spawn((
+                    Button,
+                    MobileKey(key),
+                    ControlsButton,
+                    Node {
+                        width: px(width),
+                        height: px(height),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    BackgroundColor(bg),
+                    BorderRadius::all(px(radius)),
+                ));
+
+                // Primary actions get no border; secondary buttons get a subtle one.
+                if is_primary {
+                    button.insert(PrimaryAction);
+                } else {
+                    button.insert(BorderColor::all(TRACK));
+                }
+
+                button.with_child((
+                    Text::new(label),
+                    TextFont {
+                        font: ui_font.clone(),
+                        font_size: if is_primary { FONT_BODY } else { FONT_CAPTION },
+                        ..default()
+                    },
+                    TextColor(TEXT_PRIMARY),
+                    TextLayout::new_with_justify(Justify::Center),
+                ));
             }
         });
 }
@@ -193,15 +207,20 @@ fn sync_keys(
 
 fn tint_buttons(
     mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
+        (&Interaction, &mut BackgroundColor, Option<&PrimaryAction>),
         (Changed<Interaction>, With<ControlsButton>),
     >,
 ) {
-    for (interaction, mut color) in &mut buttons {
+    for (interaction, mut color, is_primary) in &mut buttons {
+        let base = if is_primary.is_some() {
+            SURFACE_PRIMARY
+        } else {
+            SURFACE_RAISED
+        };
         *color = match *interaction {
             Interaction::Pressed => BackgroundColor(SURFACE_PRESSED),
             Interaction::Hovered => BackgroundColor(SURFACE_PRESSED),
-            Interaction::None => BackgroundColor(SURFACE_RAISED),
+            Interaction::None => BackgroundColor(base),
         };
     }
 }

@@ -262,31 +262,29 @@ am start -n com.rendivs925.cosmicsystems/android.app.NativeActivity --es mode cr
 
 - **Spacing**: 4 dp base scale (`SPACE_1..8`) used for panel padding, gaps,
   overlay padding and loading layout.
-- **Type**: display 32, title 22, body 16, caption 13, using bundled
+- **Type**: display 36, title 22, body 16, caption 13, using bundled
   `assets/fonts/Roboto-Regular.ttf` instead of Bevy's monospace `default_font`.
 - **Touch**: 64×52 dp buttons (above the 48 dp minimum), 8 dp gaps, 12 dp panel
-  padding plus a bottom safe-area allowance.
-- **Colour**: dark surface, raised surface, accent, primary/secondary text with
-  AA contrast.
+  padding plus a bottom safe-area allowance. Primary actions (Stage) are
+  120×64 dp.
+- **Colour**: space-themed palette with translucent surfaces (`SURFACE_PANEL`
+  0.72 alpha), accent blue (`ACCENT`), warm accent (`ACCENT_WARM`), and layered
+  text hierarchy.
 - **Safe areas**: the activity uses `Theme.Material.NoActionBar.Fullscreen`, so
   the status bar is gone; the UI adds conservative top/bottom padding.
 
 The activity declares `sensorLandscape` and a full `configChanges` list, so
 rotation reflows the UI instead of recreating (and restarting) the simulation.
 
-The loading screen has a title/subtitle hierarchy, a progress track and counter,
-and an animated phase label driven by `Time<Real>` (virtual simulation time is
-paused). It is deadline-driven so it can never sit on “Finalizing renderer”
-forever:
+The loading screen has a branded wordmark, animated pulse indicator, and
+cycling contextual tips ("Drag to look around", "Pinch to zoom", "Tap a planet
+to focus"). On completion, it fades out smoothly (0.45 s) into the scene.
 
-- assets settle when every texture resolves;
-- unresolved assets are abandoned after **30 s**;
-- a tap after **8 s** skips the wait (“Taking longer than expected — tap to
-  continue”);
-- the screen closes unconditionally after **45 s**.
+The onboarding hint teaches the gesture vocabulary ("Drag to look · Pinch to
+zoom · Tap to select") and auto-dismisses on first touch or after 6 seconds.
 
-The completion log records the reason (`ready`, `timeout`, `skip`, `deadline`),
-load/failure counts, warmup frames and duration.
+Control buttons use Unicode symbols (↑ ↓ ← → ↺ ↻) and clear verbs. Primary
+actions (Stage in rocket mode) are visually prominent: larger, blue, centered.
 
 ## Current status
 
@@ -296,26 +294,27 @@ load/failure counts, warmup frames and duration.
   - `cargo test --lib shipped_paths` passes on-device (the test harness links and
     runs natively because Termux's host triple is the Android target).
   - `cargo apk2 build --lib --profile android` produces a signed, optimized APK.
-- **Loading phase (Android)**: simulation time is paused behind a loading screen
-  until every texture in `assets/textures` is loaded, followed by at least 15
-  warmup frames / 0.75 s so GPU uploads and shader pipelines finish before
-  interaction. Progress, load/failure counts and the exit reason are written to
-  the startup log.
+- **Loading phase (Android)**: simulation time is paused behind a branded loading
+  screen until every texture resolves, followed by a 0.75 s warmup so GPU uploads
+  and shader pipelines finish before interaction. The screen fades out smoothly
+  into the scene. Progress and load/failure counts are written to the startup log
+  for engineering use only.
 - **Touch (Android)**: one-finger drag orbits and zooms the solar camera,
   two-finger pinch zooms, through the same `CameraController` state the desktop
   keyboard path uses.
 - **Per-mode panel (Android)**: solar, craft and rocket bindings are synthesised
   into `ButtonInput<KeyCode>`, so flight logic is unchanged. Implemented; rocket
   and craft need on-device verification.
-- **On-screen readout (Android)**: FPS and frame time in the top-left corner, plus
-  a READY badge and a touch counter/dot for on-device diagnosis.
+- **On-screen readout (Android)**: compact onboarding pill ("Drag to look · Pinch
+  to zoom · Tap to select") auto-dismisses on first touch or after 6 seconds.
+  No debug overlays are shown to the player.
 - **Perf telemetry (Android)**: every 5 s the startup log records `fps`,
   `avg_ms`, `max_ms`, stall count (>33 ms), RSS (`mem_mb`), window size and the
   measured control-panel height.
-- **Screen capture (Android)**: opt-in only, because copying the window
-  swapchain is not uniformly supported by Android drivers. Launch with
-  `--ez screenshot true` to write `startup_screenshot.png` into the media
-  directory after 6 s.
+- **Screen capture (Android)**: writes `startup_screenshot.png` to the media
+  directory after 6 s so the actual displayed frame can be inspected. If the
+  Vulkan driver cannot copy the swapchain, the render thread panics and the
+  panic hook records the reason before the process exits.
 - **NativeActivity has no soft-keyboard support.**
 - **Desktop validation (`cargo run`, `craft`, `rocket`) must run on a desktop or
   CI**: Termux's host target *is* Android, so it cannot exercise the desktop cfg.

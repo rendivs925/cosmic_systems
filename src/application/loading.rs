@@ -1,18 +1,19 @@
-//! Android loading phase: preload every texture and warm up the renderer before
-//! the simulation is allowed to run.
+//! Android loading phase: a branded, premium loading experience.
 //!
-//! Texture decoding, GPU upload and pipeline compilation are the main sources of
-//! start-up stutter. Holding virtual time paused behind a loading screen lets all
-//! of that finish first.
+//! Texture decoding, GPU upload and pipeline compilation are the main sources
+//! of start-up stutter. The loading screen runs on real (wall-clock) time while
+//! virtual simulation time is paused, so the first interactive frames have
+//! their pipelines and uploads finished before interaction.
 //!
-//! The phase is deadline-driven so it can never sit on “Finalizing renderer”
-//! forever:
+//! The user sees a clean branded screen with an animated indicator and cycling
+//! contextual tips — no developer jargon. The phase is deadline-driven so it
+//! can never sit indefinitely:
 //! - assets normally settle when every texture resolves;
 //! - after `ASSET_TIMEOUT_SECONDS` pending assets are abandoned;
 //! - after `HARD_DEADLINE_SECONDS` the screen closes unconditionally;
 //! - after `SKIP_AFTER_SECONDS` a tap closes it immediately.
 //!
-//! Animation runs on `Time<Real>` because virtual simulation time is paused.
+//! On completion the screen fades out smoothly into the scene.
 
 use bevy::asset::{AssetServer, LoadState};
 use bevy::prelude::*;
@@ -45,22 +46,38 @@ struct Preload {
     started_at: f32,
     timed_out: bool,
     skipped: bool,
+    fade_started_at: Option<f32>,
 }
 
 #[derive(Component)]
 struct LoadingRoot;
 
+/// The animated pulse indicator (a small circle that scales/breathes).
 #[derive(Component)]
-struct ProgressFill;
+struct PulseIndicator;
 
+/// Cycling tip text.
 #[derive(Component)]
-struct ProgressLabel;
+struct TipLabel;
 
+/// "Tap to continue" hint, shown only after the skip threshold.
 #[derive(Component)]
-struct PhaseLabel;
+struct SkipHint;
 
+/// Brand text.
 #[derive(Component)]
-struct HintLabel;
+struct BrandLabel;
+
+/// Contextual tips shown during loading. These are player-facing, not
+/// developer-facing: no texture counts, no pipeline stages.
+const LOADING_TIPS: &[&str] = &[
+    "Drag to look around",
+    "Pinch to zoom",
+    "Tap a planet to focus",
+    "Select mode from the launcher",
+];
+
+const TIP_INTERVAL_SECS: f32 = 3.0;
 
 impl Plugin for AndroidLoadingPlugin {
     fn build(&self, app: &mut App) {
@@ -96,8 +113,8 @@ fn begin_loading(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                row_gap: px(SPACE_2),
-                padding: UiRect::all(px(SPACE_4)),
+                row_gap: px(SPACE_3),
+                padding: UiRect::all(px(SPACE_6)),
                 ..default()
             },
             BackgroundColor(SURFACE),
@@ -105,6 +122,14 @@ fn begin_loading(
             LoadingRoot,
         ))
         .with_children(|root| {
+            // Spacer pushes content toward the vertical centre with more weight
+            // above so the brand feels anchored, not cramped.
+            root.spawn(Node {
+                height: px(SPACE_8),
+                ..default()
+            });
+
+            // Brand wordmark.
             root.spawn((
                 Text::new("COSMIC SYSTEMS"),
                 TextFont {
@@ -113,79 +138,66 @@ fn begin_loading(
                     ..default()
                 },
                 TextColor(TEXT_PRIMARY),
+                BrandLabel,
             ));
+
+            // Thin accent rule under the brand.
             root.spawn((
-                Text::new("Preparing simulation"),
-                TextFont {
-                    font: ui_font.clone(),
-                    font_size: FONT_BODY,
-                    ..default()
-                },
-                TextColor(TEXT_SECONDARY),
                 Node {
+                    width: px(48),
+                    height: px(2),
                     margin: UiRect::bottom(px(SPACE_6)),
                     ..default()
                 },
+                BackgroundColor(ACCENT),
+                BorderRadius::all(px(1)),
             ));
 
+            // Animated pulse indicator.
             root.spawn((
                 Node {
-                    width: percent(72),
-                    max_width: px(420),
-                    height: px(8),
-                    ..default()
-                },
-                BackgroundColor(TRACK),
-                BorderRadius::all(px(SPACE_1)),
-            ))
-            .with_child((
-                Node {
-                    width: percent(0),
-                    height: percent(100),
+                    width: px(14),
+                    height: px(14),
+                    margin: UiRect::new(px(0), px(0), px(SPACE_4), px(SPACE_4)),
                     ..default()
                 },
                 BackgroundColor(ACCENT),
-                BorderRadius::all(px(SPACE_1)),
-                ProgressFill,
+                BorderRadius::all(px(7)),
+                PulseIndicator,
             ));
 
+            // Cycling tip.
             root.spawn((
-                Text::new(format!("0 / {total} textures")),
-                TextFont {
-                    font: ui_font.clone(),
-                    font_size: FONT_CAPTION,
-                    ..default()
-                },
-                TextColor(TEXT_SECONDARY),
-                Node {
-                    margin: UiRect::top(px(SPACE_3)),
-                    ..default()
-                },
-                ProgressLabel,
-            ));
-            root.spawn((
-                Text::new("Loading textures"),
+                Text::new(LOADING_TIPS[0]),
                 TextFont {
                     font: ui_font.clone(),
                     font_size: FONT_BODY,
                     ..default()
                 },
-                TextColor(TEXT_PRIMARY),
-                PhaseLabel,
+                TextColor(TEXT_SECONDARY),
+                TipLabel,
             ));
+
+            // "Tap to continue" — hidden until the skip threshold.
             root.spawn((
-                Text::new(""),
+                Node {
+                    margin: UiRect::top(px(SPACE_8)),
+                    padding: UiRect::new(px(SPACE_4), px(SPACE_4), px(SPACE_2), px(SPACE_2)),
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(SURFACE_RAISED),
+                BorderRadius::all(px(RADIUS_FULL)),
+                SkipHint,
+            ))
+            .with_child((
+                Text::new("Tap to continue"),
                 TextFont {
-                    font: ui_font,
+                    font: ui_font.clone(),
                     font_size: FONT_CAPTION,
                     ..default()
                 },
-                TextColor(TEXT_SECONDARY),
-                Node {
-                    margin: UiRect::top(px(SPACE_2)),
-                    ..default()
-                },
-                HintLabel,
+                TextColor(TEXT_PRIMARY),
             ));
         });
 }
@@ -197,21 +209,30 @@ fn update_loading(
     touches: Res<Touches>,
     mut preload: ResMut<Preload>,
     mut virtual_time: ResMut<Time<Virtual>>,
-    mut fills: Query<&mut Node, With<ProgressFill>>,
-    mut progress_labels: Query<&mut Text, (With<ProgressLabel>, Without<PhaseLabel>)>,
-    mut phase_labels: Query<&mut Text, (With<PhaseLabel>, Without<ProgressLabel>)>,
-    mut hint_labels: Query<
-        &mut Text,
-        (With<HintLabel>, Without<ProgressLabel>, Without<PhaseLabel>),
-    >,
-    mut roots: Query<(Entity, &mut Node), (With<LoadingRoot>, Without<ProgressFill>)>,
+    mut roots: Query<(Entity, &mut BackgroundColor, &mut Node), With<LoadingRoot>>,
+    mut pulses: Query<&mut Node, (With<PulseIndicator>, Without<LoadingRoot>)>,
+    mut tips: Query<&mut Text, With<TipLabel>>,
+    mut skip_hints: Query<&mut Node, (With<SkipHint>, Without<LoadingRoot>)>,
 ) {
+    // --- Animated pulse (runs on real time, independent of loading state). ---
+    let elapsed = real_time.elapsed_secs() - preload.started_at;
+    let phase = (elapsed * 2.2).sin() * 0.5 + 0.5; // 0..1 breathing
+    for mut node in &mut pulses {
+        let scale = 0.65 + phase * 0.7; // 0.65..1.35
+        let size = 14.0 * scale;
+        node.width = px(size);
+        node.height = px(size);
+    }
+
+    // --- Cycling tip. ---
+    let tip_index = (elapsed / TIP_INTERVAL_SECS) as usize % LOADING_TIPS.len();
+    for mut text in &mut tips {
+        text.0 = LOADING_TIPS[tip_index].to_string();
+    }
+
     if preload.finished {
         return;
     }
-
-    let total = preload.images.len().max(1);
-    let elapsed = real_time.elapsed_secs() - preload.started_at;
 
     let mut loaded = 0usize;
     let mut failed = 0usize;
@@ -244,35 +265,14 @@ fn update_loading(
         ));
     }
 
-    // Progress bar and counters.
-    let resolved = loaded + failed;
-    let fraction = resolved as f32 / total as f32;
-    for mut node in &mut fills {
-        node.width = percent(fraction * 100.0);
-    }
-    for mut text in &mut progress_labels {
-        text.0 = if failed > 0 {
-            format!("{resolved} / {total} textures  ({failed} failed)")
-        } else {
-            format!("{resolved} / {total} textures")
-        };
-    }
-
+    // Show the skip hint after the threshold.
     let settled = preload.settled_at.is_some();
-    let dots = 1 + (real_time.elapsed_secs() * 2.0) as usize % 3;
-    let phase = if settled {
-        "Finalizing renderer"
-    } else {
-        "Loading textures"
-    };
-    for mut text in &mut phase_labels {
-        text.0 = format!("{phase}{}", ".".repeat(dots));
-    }
-    for mut text in &mut hint_labels {
-        text.0 = if !settled && elapsed >= SKIP_AFTER_SECONDS {
-            "Taking longer than expected — tap to continue".to_string()
+    for mut node in &mut skip_hints {
+        let should_show = !settled && elapsed >= SKIP_AFTER_SECONDS;
+        node.display = if should_show {
+            Display::Flex
         } else {
-            String::new()
+            Display::None
         };
     }
 
@@ -289,28 +289,39 @@ fn update_loading(
         return;
     }
 
-    // Hide first, then despawn: even if the layout children outlive the root for
-    // a frame, the screen cannot remain visible.
-    let mut removed = 0usize;
-    for (entity, mut node) in &mut roots {
-        node.display = Display::None;
-        commands.entity(entity).despawn();
-        removed += 1;
-    }
-    diagnostics::log(&format!("loading: hid and despawned {removed} root(s)"));
-    virtual_time.unpause();
-    preload.finished = true;
-    diagnostics::log(&format!(
-        "loading: complete in {elapsed:.1}s ({loaded} loaded, {failed} failed, {} warmup frames, reason={})",
-        preload.warmup_frames,
-        if forced {
-            "deadline"
-        } else if preload.skipped {
-            "skip"
-        } else if preload.timed_out {
-            "timeout"
-        } else {
-            "ready"
+    // --- Fade-out transition before despawn. ---
+    let fade_started = preload.fade_started_at.get_or_insert(elapsed);
+    let fade_elapsed = elapsed - *fade_started;
+    let fade_t = (fade_elapsed / FADE_OUT_SECONDS).clamp(0.0, 1.0);
+    let alpha = 1.0 - fade_t;
+
+    for (entity, mut bg, mut node) in &mut roots {
+        // Lerp the background alpha toward transparent.
+        let mut c = bg.0;
+        if let Color::LinearRgba(ref mut lin) = &mut c {
+            lin.alpha = alpha;
         }
-    ));
+        bg.0 = c;
+
+        if fade_t >= 1.0 {
+            node.display = Display::None;
+            commands.entity(entity).despawn();
+            diagnostics::log("loading: fade complete, root despawned");
+            virtual_time.unpause();
+            preload.finished = true;
+            diagnostics::log(&format!(
+                "loading: complete in {elapsed:.1}s ({loaded} loaded, {failed} failed, {} warmup frames, reason={})",
+                preload.warmup_frames,
+                if forced {
+                    "deadline"
+                } else if preload.skipped {
+                    "skip"
+                } else if preload.timed_out {
+                    "timeout"
+                } else {
+                    "ready"
+                }
+            ));
+        }
+    }
 }
