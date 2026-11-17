@@ -10,6 +10,7 @@
 pub(crate) mod controls;
 pub(crate) mod diagnostics;
 mod presentation;
+pub(crate) mod theme;
 
 use bevy::prelude::bevy_main;
 use std::ffi::CString;

@@ -2,7 +2,7 @@
 
 [package]
 name = "cosmic_systems"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 default-run = "cosmic_systems"
 
@@ -145,6 +145,8 @@ target_sdk_version = 35
 
 [package.metadata.android.application]
 label = "Cosmic Systems"
+# Fullscreen, no action bar: the UI draws its own safe-area padding.
+theme = "@android:style/Theme.Material.NoActionBar.Fullscreen"
 
 # NativeActivity needs no Java: the framework activity loads the cdylib named in
 # the meta-data and calls its `ANativeActivity_onCreate` (provided by

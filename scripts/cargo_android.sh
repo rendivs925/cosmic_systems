@@ -12,4 +12,4 @@ set -eu
 cd "$(dirname "$0")/.."
 . scripts/android_env.sh
 
-android_cargo --target aarch64-linux-android --profile android "$@"
+android_cargo "$@" --target aarch64-linux-android --profile android

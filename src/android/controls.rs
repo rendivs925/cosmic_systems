@@ -6,19 +6,22 @@
 //! bindings already consume. One finger drag/pinch remains camera control.
 //!
 //! The launch mode is selected with an intent extra:
-//!   adb shell am start -n com.rendivs925.cosmicsystems/android.app.NativeActivity \
+//!   am start -n com.rendivs925.cosmicsystems/android.app.NativeActivity \
 //!       --es mode rocket
 
 use bevy::input::ButtonInput;
 use bevy::prelude::*;
+use bevy::ui::BorderColor;
 
 use crate::android::diagnostics;
+use crate::android::theme::*;
 use crate::application::modes::Mode;
 use crate::infrastructure::bevy_adapters::input_systems::handle_mouse_planet_selection;
 
-/// Fraction of the window height occupied by the on-screen panel. Camera drags
-/// that start below this line are ignored so buttons do not also rotate the view.
-pub const PANEL_HEIGHT_FRACTION: f32 = 0.45;
+/// Height of the on-screen panel in logical pixels, measured after layout so
+/// camera drags can be excluded precisely instead of using a fixed fraction.
+#[derive(Resource, Default)]
+pub struct ControlPanelExtent(pub f32);
 
 #[derive(Resource, Clone, Copy)]
 pub struct MobileMode(pub Mode);
@@ -38,8 +41,9 @@ struct ControlsButton;
 pub fn install(app: &mut App, mode: Mode) {
     app.insert_resource(MobileMode(mode))
         .insert_resource(HeldKeys::default())
+        .insert_resource(ControlPanelExtent::default())
         .add_systems(Startup, spawn_panel)
-        .add_systems(Update, (sync_keys, tint_buttons).chain())
+        .add_systems(Update, (sync_keys, tint_buttons, measure_panel).chain())
         // Taps must be seen by the planet-selection raycast in the same frame.
         .add_systems(Update, tap_select.before(handle_mouse_planet_selection));
 }
@@ -121,12 +125,19 @@ fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>) {
                 flex_wrap: FlexWrap::Wrap,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                row_gap: px(6),
-                column_gap: px(6),
-                padding: UiRect::all(px(6)),
+                row_gap: px(SPACE_2),
+                column_gap: px(SPACE_2),
+                padding: UiRect::new(
+                    px(SPACE_3),
+                    px(SPACE_3),
+                    px(SPACE_3),
+                    px(SPACE_3 + SAFE_BOTTOM),
+                ),
+                border: UiRect::top(px(1)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.03, 0.03, 0.05, 0.78)),
+            BackgroundColor(SURFACE),
+            BorderColor::all(TRACK),
             ControlsPanel,
         ))
         .with_children(|panel| {
@@ -137,21 +148,23 @@ fn spawn_panel(mut commands: Commands, mode: Res<MobileMode>) {
                         MobileKey(key),
                         ControlsButton,
                         Node {
-                            width: px(66),
-                            height: px(50),
+                            width: px(TOUCH_WIDTH),
+                            height: px(TOUCH_HEIGHT),
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.16, 0.17, 0.22, 0.95)),
+                        BackgroundColor(SURFACE_RAISED),
+                        BorderRadius::all(px(RADIUS_SM)),
                     ))
                     .with_child((
                         Text::new(label),
                         TextFont {
-                            font_size: 15.0,
+                            font_size: FONT_CAPTION,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(TEXT_PRIMARY),
+                        TextLayout::new_with_justify(Justify::Center),
                     ));
             }
         });
@@ -184,10 +197,20 @@ fn tint_buttons(
 ) {
     for (interaction, mut color) in &mut buttons {
         *color = match *interaction {
-            Interaction::Pressed => BackgroundColor(Color::srgba(0.30, 0.55, 0.85, 0.98)),
-            Interaction::Hovered => BackgroundColor(Color::srgba(0.22, 0.25, 0.33, 0.98)),
-            Interaction::None => BackgroundColor(Color::srgba(0.16, 0.17, 0.22, 0.95)),
+            Interaction::Pressed => BackgroundColor(SURFACE_PRESSED),
+            Interaction::Hovered => BackgroundColor(SURFACE_PRESSED),
+            Interaction::None => BackgroundColor(SURFACE_RAISED),
         };
+    }
+}
+
+/// Publish the laid-out panel height so camera drags can ignore that region.
+fn measure_panel(
+    panel: Query<&ComputedNode, With<ControlsPanel>>,
+    mut extent: ResMut<ControlPanelExtent>,
+) {
+    if let Ok(node) = panel.single() {
+        extent.0 = node.size().y * node.inverse_scale_factor();
     }
 }
 
@@ -195,13 +218,18 @@ fn tint_buttons(
 /// reusing the desktop mouse-selection raycast by synthesising one click.
 fn tap_select(
     touches: Res<Touches>,
+    extent: Res<ControlPanelExtent>,
     mut windows: Query<&mut Window>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
 ) {
     let Ok(mut window) = windows.single_mut() else {
         return;
     };
-    let panel_top = window.height() * (1.0 - PANEL_HEIGHT_FRACTION);
+    let panel_top = if extent.0 > 0.0 {
+        window.height() - extent.0
+    } else {
+        window.height() * 0.55
+    };
     for touch in touches.iter_just_released() {
         let travel = touch.position().distance(touch.start_position());
         if travel > 24.0 || touch.start_position().y > panel_top {

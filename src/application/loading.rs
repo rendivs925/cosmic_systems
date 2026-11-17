@@ -3,19 +3,24 @@
 //!
 //! Texture decoding, GPU upload and pipeline compilation are the main sources of
 //! start-up stutter. Holding virtual time paused behind a loading screen lets all
-//! of that finish first, so the first interactive seconds are smooth instead of
-//! hitching.
+//! of that finish first. The screen reports progress, an animated phase label
+//! (driven by real time, since virtual time is paused) and a hard timeout so a
+//! missing asset can never leave the app stuck.
 
 use bevy::asset::{AssetServer, LoadState};
 use bevy::prelude::*;
-use bevy::time::Virtual;
+use bevy::time::{Real, Virtual};
 
 use crate::android::diagnostics;
+use crate::android::theme::*;
 use crate::generated_assets::PRELOAD_TEXTURES;
 
 /// Frames rendered after the last asset resolves, to absorb uploads and shader
 /// pipeline compilation triggered by the first render of each material.
 const WARMUP_FRAMES: u32 = 90;
+
+/// Never block forever: after this long, continue with whatever is ready.
+const LOAD_TIMEOUT_SECONDS: f32 = 30.0;
 
 pub struct AndroidLoadingPlugin;
 
@@ -23,16 +28,23 @@ pub struct AndroidLoadingPlugin;
 struct Preload {
     images: Vec<Handle<Image>>,
     failed: usize,
+    loaded: usize,
     warmup_frames: u32,
     finished: bool,
-    last_report: usize,
+    started_at: f32,
 }
 
 #[derive(Component)]
-struct LoadingScreen;
+struct LoadingRoot;
 
 #[derive(Component)]
-struct LoadingLabel;
+struct ProgressFill;
+
+#[derive(Component)]
+struct ProgressLabel;
+
+#[derive(Component)]
+struct PhaseLabel;
 
 impl Plugin for AndroidLoadingPlugin {
     fn build(&self, app: &mut App) {
@@ -45,21 +57,18 @@ impl Plugin for AndroidLoadingPlugin {
 fn begin_loading(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    real_time: Res<Time<Real>>,
     mut preload: ResMut<Preload>,
     mut virtual_time: ResMut<Time<Virtual>>,
 ) {
-    // Freeze simulation time; rendering keeps running so uploads and pipelines
-    // complete while the loading screen is visible.
     virtual_time.pause();
-
+    preload.started_at = real_time.elapsed_secs();
     preload.images = PRELOAD_TEXTURES
         .iter()
         .map(|path| asset_server.load(*path))
         .collect();
-    diagnostics::log(&format!(
-        "loading: {} textures queued",
-        preload.images.len()
-    ));
+    let total = preload.images.len();
+    diagnostics::log(&format!("loading: {total} textures queued"));
 
     commands
         .spawn((
@@ -67,35 +76,101 @@ fn begin_loading(
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
+                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
+                row_gap: px(SPACE_2),
+                padding: UiRect::all(px(SPACE_4)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.02, 0.02, 0.03)),
-            LoadingScreen,
+            BackgroundColor(SURFACE),
+            GlobalZIndex(1000),
+            LoadingRoot,
         ))
-        .with_child((
-            Text::new("Loading textures..."),
-            TextFont {
-                font_size: 28.0,
-                ..default()
-            },
-            TextColor(Color::WHITE),
-            LoadingLabel,
-        ));
+        .with_children(|root| {
+            root.spawn((
+                Text::new("COSMIC SYSTEMS"),
+                TextFont {
+                    font_size: FONT_DISPLAY,
+                    ..default()
+                },
+                TextColor(TEXT_PRIMARY),
+            ));
+            root.spawn((
+                Text::new("Preparing simulation"),
+                TextFont {
+                    font_size: FONT_BODY,
+                    ..default()
+                },
+                TextColor(TEXT_SECONDARY),
+                Node {
+                    margin: UiRect::bottom(px(SPACE_6)),
+                    ..default()
+                },
+            ));
+
+            // Progress track.
+            root.spawn((
+                Node {
+                    width: percent(72),
+                    max_width: px(420),
+                    height: px(8),
+                    ..default()
+                },
+                BackgroundColor(TRACK),
+                BorderRadius::all(px(SPACE_1)),
+            ))
+            .with_child((
+                Node {
+                    width: percent(0),
+                    height: percent(100),
+                    ..default()
+                },
+                BackgroundColor(ACCENT),
+                BorderRadius::all(px(SPACE_1)),
+                ProgressFill,
+            ));
+
+            root.spawn((
+                Text::new(format!("0 / {total} textures")),
+                TextFont {
+                    font_size: FONT_CAPTION,
+                    ..default()
+                },
+                TextColor(TEXT_SECONDARY),
+                Node {
+                    margin: UiRect::top(px(SPACE_3)),
+                    ..default()
+                },
+                ProgressLabel,
+            ));
+            root.spawn((
+                Text::new("Loading textures"),
+                TextFont {
+                    font_size: FONT_BODY,
+                    ..default()
+                },
+                TextColor(TEXT_PRIMARY),
+                PhaseLabel,
+            ));
+        });
 }
 
 fn update_loading(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    real_time: Res<Time<Real>>,
     mut preload: ResMut<Preload>,
     mut virtual_time: ResMut<Time<Virtual>>,
-    mut labels: Query<&mut Text, With<LoadingLabel>>,
-    screens: Query<Entity, With<LoadingScreen>>,
+    mut fills: Query<&mut Node, With<ProgressFill>>,
+    mut progress_labels: Query<&mut Text, (With<ProgressLabel>, Without<PhaseLabel>)>,
+    mut phase_labels: Query<&mut Text, (With<PhaseLabel>, Without<ProgressLabel>)>,
+    roots: Query<Entity, With<LoadingRoot>>,
 ) {
     if preload.finished {
         return;
     }
+    let total = preload.images.len().max(1);
 
     let mut loaded = 0usize;
     let mut failed = 0usize;
@@ -107,33 +182,57 @@ fn update_loading(
             _ => pending += 1,
         }
     }
+    preload.loaded = loaded;
     preload.failed = failed;
 
-    if pending == 0 {
-        preload.warmup_frames += 1;
-        if preload.warmup_frames >= WARMUP_FRAMES {
-            for entity in &screens {
-                commands.entity(entity).despawn();
-            }
-            virtual_time.unpause();
-            preload.finished = true;
-            diagnostics::log(&format!(
-                "loading: complete ({loaded} loaded, {failed} failed, {} warmup frames)",
-                preload.warmup_frames
-            ));
-        }
+    let elapsed = real_time.elapsed_secs() - preload.started_at;
+    let timed_out = pending > 0 && elapsed >= LOAD_TIMEOUT_SECONDS;
+    if timed_out {
+        diagnostics::log(&format!(
+            "loading: timeout after {elapsed:.1}s with {pending} textures pending; continuing"
+        ));
+    }
+    let settled = pending == 0 || timed_out;
+
+    // Progress bar and counters.
+    let resolved = loaded + failed;
+    let fraction = resolved as f32 / total as f32;
+    for mut node in &mut fills {
+        node.width = percent(fraction * 100.0);
+    }
+    for mut text in &mut progress_labels {
+        text.0 = format!("{resolved} / {total} textures  ({failed} failed)");
+    }
+
+    // Animated phase label: real time keeps moving while virtual time is paused,
+    // so the screen never looks frozen.
+    let dots = 1 + (real_time.elapsed_secs() * 2.0) as usize % 3;
+    let phase = if settled {
+        "Finalizing renderer"
+    } else {
+        "Loading textures"
+    };
+    for mut text in &mut phase_labels {
+        text.0 = format!("{phase}{}", ".".repeat(dots));
+    }
+
+    if !settled {
         return;
     }
 
-    if loaded != preload.last_report {
-        preload.last_report = loaded;
-        for mut text in &mut labels {
-            text.0 = format!("Loading textures... {loaded}/{}", preload.images.len());
-        }
-        diagnostics::log(&format!(
-            "loading: {loaded}/{} textures ({} failed)",
-            preload.images.len(),
-            failed
-        ));
+    preload.warmup_frames += 1;
+    if preload.warmup_frames < WARMUP_FRAMES {
+        return;
     }
+
+    for entity in &roots {
+        commands.entity(entity).despawn();
+    }
+    virtual_time.unpause();
+    preload.finished = true;
+    let total_elapsed = real_time.elapsed_secs() - preload.started_at;
+    diagnostics::log(&format!(
+        "loading: complete in {total_elapsed:.1}s ({loaded} loaded, {failed} failed, {} warmup frames)",
+        preload.warmup_frames
+    ));
 }

@@ -9,16 +9,13 @@ use bevy::input::touch::Touches;
 use bevy::math::Dir3;
 use bevy::prelude::*;
 
-use crate::android::controls::PANEL_HEIGHT_FRACTION;
+use crate::android::controls::ControlPanelExtent;
+use crate::android::theme::*;
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
 
 /// FPS / frame-time label in the top-left corner.
 #[derive(Component)]
 struct FrameReadout;
-
-/// Touch-control hint shown under the readout.
-#[derive(Component)]
-struct TouchHint;
 
 #[derive(Default)]
 struct TouchState {
@@ -33,36 +30,50 @@ pub fn install(app: &mut App) {
 }
 
 fn spawn_overlays(mut commands: Commands) {
-    commands.spawn((
-        Text::new("-- fps"),
-        TextFont {
-            font_size: 22.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 1.0, 1.0)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
-            ..default()
-        },
-        FrameReadout,
-    ));
-    commands.spawn((
-        Text::new("Drag to look  ·  Pinch to zoom"),
-        TextFont {
-            font_size: 16.0,
-            ..default()
-        },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(44),
-            left: px(12),
-            ..default()
-        },
-        TouchHint,
-    ));
+    // FPS pill.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(SAFE_TOP + SPACE_2),
+                left: px(SPACE_3),
+                padding: UiRect::new(px(SPACE_2), px(SPACE_2), px(SPACE_1), px(SPACE_1)),
+                ..default()
+            },
+            BackgroundColor(SURFACE),
+            BorderRadius::all(px(RADIUS_SM)),
+        ))
+        .with_child((
+            Text::new("-- fps"),
+            TextFont {
+                font_size: FONT_CAPTION,
+                ..default()
+            },
+            TextColor(TEXT_PRIMARY),
+            FrameReadout,
+        ));
+
+    // Touch hint, one step down the type scale from the readout.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(SAFE_TOP + SPACE_8 + SPACE_2),
+                left: px(SPACE_3),
+                padding: UiRect::new(px(SPACE_2), px(SPACE_2), px(SPACE_1), px(SPACE_1)),
+                ..default()
+            },
+            BackgroundColor(SURFACE),
+            BorderRadius::all(px(RADIUS_SM)),
+        ))
+        .with_child((
+            Text::new("Drag look · Pinch zoom · Tap select"),
+            TextFont {
+                font_size: FONT_CAPTION,
+                ..default()
+            },
+            TextColor(TEXT_SECONDARY),
+        ));
 }
 
 fn update_frame_readout(
@@ -89,13 +100,21 @@ fn update_frame_readout(
 fn touch_camera_controls(
     touches: Res<Touches>,
     windows: Query<&Window>,
+    extent: Res<ControlPanelExtent>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
-    let panel_top = windows
-        .single()
-        .map(|window| window.height() * (1.0 - PANEL_HEIGHT_FRACTION))
-        .unwrap_or(f32::MAX);
+    let panel_top = match windows.single() {
+        Ok(window) => {
+            if extent.0 > 0.0 {
+                window.height() - extent.0
+            } else {
+                window.height() * 0.55
+            }
+        }
+        Err(_) => f32::MAX,
+    };
+
     // Collect at most two positions without allocating every frame.
     let mut first = Vec2::ZERO;
     let mut second = Vec2::ZERO;
