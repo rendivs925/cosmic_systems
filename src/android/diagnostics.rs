@@ -216,7 +216,7 @@ fn append_media_file(message: &str) -> bool {
     writeln!(file, "{message}").is_ok()
 }
 
-fn media_directory() -> PathBuf {
+pub(crate) fn media_directory() -> PathBuf {
     PathBuf::from("/sdcard/Android/media").join(PACKAGE_ID)
 }
 

@@ -8,15 +8,29 @@
 use bevy::input::touch::Touches;
 use bevy::math::Dir3;
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::time::Real;
 
 use crate::android::controls::ControlPanelExtent;
+use crate::android::diagnostics;
 use crate::android::theme::*;
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
 
 /// FPS / frame-time label in the top-left corner.
 #[derive(Component)]
 struct FrameReadout;
+
+/// Visible confirmation that the loading phase finished.
+#[derive(Component)]
+struct ReadyBadge;
+
+/// Circle rendered under the finger, proving touch delivery on-device.
+#[derive(Component)]
+struct TouchDot;
+
+/// Cumulative touch counter for the same purpose.
+#[derive(Component)]
+struct TouchCount;
 
 #[derive(Default)]
 struct TouchState {
@@ -26,8 +40,16 @@ struct TouchState {
 
 /// Register the Android-only presentation systems.
 pub fn install(app: &mut App) {
-    app.add_systems(Startup, spawn_overlays)
-        .add_systems(Update, (touch_camera_controls, update_frame_readout));
+    app.add_systems(Startup, spawn_overlays).add_systems(
+        Update,
+        (
+            touch_camera_controls,
+            update_frame_readout,
+            touch_indicator,
+            show_ready_badge,
+            capture_startup_screenshot,
+        ),
+    );
 }
 
 fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -54,6 +76,66 @@ fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             TextColor(TEXT_PRIMARY),
             FrameReadout,
+        ));
+
+    // READY badge, hidden until the loading phase is over.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(SAFE_TOP + SPACE_2),
+                width: percent(100),
+                justify_content: JustifyContent::Center,
+                display: Display::None,
+                ..default()
+            },
+            ReadyBadge,
+        ))
+        .with_child((
+            Text::new("READY · v0.2.3"),
+            TextFont {
+                font_size: FONT_CAPTION,
+                ..default()
+            },
+            TextColor(ACCENT),
+        ));
+
+    // Finger marker.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: px(48),
+            height: px(48),
+            display: Display::None,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.45)),
+        BorderRadius::all(px(24)),
+        GlobalZIndex(900),
+        TouchDot,
+    ));
+
+    // Touch counter.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(SAFE_TOP + SPACE_2),
+                right: px(SPACE_3),
+                padding: UiRect::new(px(SPACE_2), px(SPACE_2), px(SPACE_1), px(SPACE_1)),
+                ..default()
+            },
+            BackgroundColor(SURFACE),
+            BorderRadius::all(px(RADIUS_SM)),
+        ))
+        .with_child((
+            Text::new("touches: 0"),
+            TextFont {
+                font_size: FONT_CAPTION,
+                ..default()
+            },
+            TextColor(TEXT_SECONDARY),
+            TouchCount,
         ));
 
     // Touch hint, one step down the type scale from the readout.
@@ -217,4 +299,69 @@ fn touch_camera_controls(
             state.last_position = None;
         }
     }
+}
+
+/// Show the READY badge once the loading phase should be done.
+fn show_ready_badge(real_time: Res<Time<Real>>, mut badges: Query<&mut Node, With<ReadyBadge>>) {
+    if real_time.elapsed_secs() < 6.0 {
+        return;
+    }
+    for mut node in &mut badges {
+        if node.display == Display::None {
+            node.display = Display::Flex;
+        }
+    }
+}
+
+/// Draw a marker under the finger and count touches, so an unresponsive screen
+/// can be told apart from an input-delivery problem.
+fn touch_indicator(
+    touches: Res<Touches>,
+    mut dot: Query<&mut Node, With<TouchDot>>,
+    mut counts: Query<&mut Text, With<TouchCount>>,
+    mut total: Local<u32>,
+) {
+    let pressed = touches.iter_just_pressed().count() as u32;
+    if pressed > 0 {
+        *total += pressed;
+        for mut text in &mut counts {
+            text.0 = format!("touches: {}", *total);
+        }
+    }
+
+    let first = touches.iter().next().map(|touch| touch.position());
+    for mut node in &mut dot {
+        match first {
+            Some(position) => {
+                node.display = Display::Flex;
+                node.left = px(position.x - 24.0);
+                node.top = px(position.y - 24.0);
+            }
+            None => node.display = Display::None,
+        }
+    }
+}
+
+/// Capture the actual presented screen a few seconds after startup and write it
+/// where Termux can read it. This settles "is the loading screen really gone?"
+/// without another guessing cycle.
+fn capture_startup_screenshot(
+    mut commands: Commands,
+    real_time: Res<Time<Real>>,
+    mut taken: Local<bool>,
+) {
+    if *taken || real_time.elapsed_secs() < 6.0 {
+        return;
+    }
+    *taken = true;
+    let directory = diagnostics::media_directory();
+    if std::fs::create_dir_all(&directory).is_err() {
+        diagnostics::log("screenshot: cannot create media directory");
+        return;
+    }
+    let path = directory.join("startup_screenshot.png");
+    diagnostics::log(&format!("screenshot: requesting {}", path.display()));
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
 }
