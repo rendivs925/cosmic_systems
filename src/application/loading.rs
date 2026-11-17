@@ -291,10 +291,13 @@ fn update_loading(
 
     // Hide first, then despawn: even if the layout children outlive the root for
     // a frame, the screen cannot remain visible.
+    let mut removed = 0usize;
     for (entity, mut node) in &mut roots {
         node.display = Display::None;
         commands.entity(entity).despawn();
+        removed += 1;
     }
+    diagnostics::log(&format!("loading: hid and despawned {removed} root(s)"));
     virtual_time.unpause();
     preload.finished = true;
     diagnostics::log(&format!(

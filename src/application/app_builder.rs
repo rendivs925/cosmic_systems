@@ -276,6 +276,8 @@ fn android_diagnostics(
     adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     cameras: Query<&Msaa>,
     lights: Query<&DirectionalLight>,
+    windows: Query<&Window>,
+    panel: Res<crate::android::controls::ControlPanelExtent>,
     mut state: Local<AndroidDiagnosticsState>,
 ) {
     use crate::android::diagnostics;
@@ -312,11 +314,16 @@ fn android_diagnostics(
         if state.samples < 6 {
             let fps = state.frames as f32 / state.elapsed_s;
             let memory = crate::android::diagnostics::memory_mb().unwrap_or(0);
+            let (width, height) = windows
+                .single()
+                .map(|window| (window.width(), window.height()))
+                .unwrap_or((0.0, 0.0));
             diagnostics::log(&format!(
-                "perf: fps={fps:.1} avg_ms={:.2} max_ms={:.2} stalls={} mem_mb={memory}",
+                "perf: fps={fps:.1} avg_ms={:.2} max_ms={:.2} stalls={} mem_mb={memory} window={width:.0}x{height:.0} panel_h={:.0}",
                 1000.0 / fps.max(0.001),
                 state.max_delta_s * 1000.0,
-                state.stalls
+                state.stalls,
+                panel.0
             ));
         }
         state.samples += 1;

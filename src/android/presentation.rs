@@ -8,6 +8,7 @@
 use bevy::input::touch::Touches;
 use bevy::math::Dir3;
 use bevy::prelude::*;
+use bevy::time::Real;
 
 use crate::android::controls::ControlPanelExtent;
 use crate::android::theme::*;
@@ -102,6 +103,8 @@ fn update_frame_readout(
 /// the desktop input path uses.
 fn touch_camera_controls(
     touches: Res<Touches>,
+    real_time: Res<Time<Real>>,
+    mut last_touch_log: Local<f32>,
     windows: Query<&Window>,
     extent: Res<ControlPanelExtent>,
     mut state: Local<TouchState>,
@@ -109,14 +112,26 @@ fn touch_camera_controls(
 ) {
     let panel_top = match windows.single() {
         Ok(window) => {
-            if extent.0 > 0.0 {
-                window.height() - extent.0
-            } else {
-                window.height() * 0.55
-            }
+            // Never reserve more than half the height: a wrong panel
+            // measurement must not disable camera control entirely.
+            let reserved = extent.0.clamp(0.0, window.height() * 0.5);
+            window.height() - reserved
         }
         Err(_) => f32::MAX,
     };
+
+    // Report incoming touches once per second so an unresponsive screen can be
+    // distinguished from a rendering problem in the on-device log.
+    if touches.any_just_pressed() && real_time.elapsed_secs() - *last_touch_log > 1.0 {
+        *last_touch_log = real_time.elapsed_secs();
+        if let Some(touch) = touches.iter().next() {
+            crate::android::diagnostics::log(&format!(
+                "touch: down at ({:.0},{:.0}) panel_top={panel_top:.0}",
+                touch.position().x,
+                touch.position().y
+            ));
+        }
+    }
 
     // Collect at most two positions without allocating every frame.
     let mut first = Vec2::ZERO;
