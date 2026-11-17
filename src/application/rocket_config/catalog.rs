@@ -6,9 +6,8 @@ use bevy::prelude::*;
 use sha2::{Digest, Sha256};
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// All vehicles available for selection, keyed by config file stem
 /// (`falcon9.ron` → key `falcon9`). A BTreeMap keeps listing deterministic.
@@ -148,15 +147,8 @@ impl VehicleSelection {
     }
 }
 
-/// Resolve the config directory the same way bevy_asset resolves its asset
-/// root: BEVY_ASSET_ROOT env, then CARGO_MANIFEST_DIR (set under cargo),
-/// then the current directory.
+/// Resolve the config directory through the one shipped-asset root policy, so
+/// native and staged Android builds read the same tree.
 fn configs_root() -> PathBuf {
-    if let Ok(root) = env::var("BEVY_ASSET_ROOT") {
-        return Path::new(&root).join(CONFIGS_RELATIVE_PATH);
-    }
-    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
-        return Path::new(&manifest_dir).join(CONFIGS_RELATIVE_PATH);
-    }
-    PathBuf::from(CONFIGS_RELATIVE_PATH)
+    crate::domain::services::shipped_paths::resolve(CONFIGS_RELATIVE_PATH)
 }

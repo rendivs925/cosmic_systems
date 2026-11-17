@@ -6,8 +6,9 @@ use crate::domain::value_objects::launch_site_coordinates::PredefinedLaunchSite;
 use crate::domain::value_objects::recovery_deck::RecoveryDeckCoordinates;
 
 /// Application run modes selectable from the CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
+    #[default]
     Solar,
     Craft,
     Rocket,
@@ -15,7 +16,7 @@ pub enum Mode {
 
 /// Everything parsed from the command line: the run mode plus mode-specific
 /// options.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LaunchOptions {
     pub mode: Mode,
     /// `--vehicle <key>` selection; only meaningful in rocket mode.
@@ -28,6 +29,15 @@ pub struct LaunchOptions {
     pub recovery_deck: Option<RecoveryDeckCoordinates>,
     /// `--force-model <tier>` selection; only meaningful in rocket mode.
     pub force_model: Option<ForceModelTier>,
+}
+
+impl LaunchOptions {
+    /// The default launch: solar-system mode with no mode-specific options.
+    ///
+    /// Platform entry points without a command line (Android) start here.
+    pub fn solar() -> Self {
+        Self::default()
+    }
 }
 
 /// Invalid command-line input. Launch selection is explicit; unknown arguments

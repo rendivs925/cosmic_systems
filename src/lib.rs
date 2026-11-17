@@ -1,5 +1,9 @@
+#[cfg(target_os = "android")]
+pub mod android;
 pub mod application;
 pub mod domain;
+#[cfg(target_os = "android")]
+pub mod generated_assets;
 pub mod infrastructure;
 pub mod presentation;
 #[cfg(target_arch = "wasm32")]

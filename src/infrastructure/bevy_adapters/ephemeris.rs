@@ -17,10 +17,9 @@ use crate::domain::services::simulation_epoch::{LeapSecondTable, UtcDateTime};
 use crate::domain::services::simulation_time::SimulationTime;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub const DEFAULT_EPHEMERIS_MANIFEST_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/configs/ephemeris/de440.ron"
-);
+pub fn default_ephemeris_manifest_path() -> std::path::PathBuf {
+    crate::domain::services::shipped_paths::resolve("assets/configs/ephemeris/de440.ron")
+}
 
 /// Measurement-only start instant for deterministic captures.
 ///
@@ -301,7 +300,7 @@ pub enum EphemerisSet {
 impl Plugin for EphemerisPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(not(target_arch = "wasm32"))]
-        let authority = SpiceEphemeris::load(DEFAULT_EPHEMERIS_MANIFEST_PATH);
+        let authority = SpiceEphemeris::load(default_ephemeris_manifest_path());
         #[cfg(target_arch = "wasm32")]
         let authority = SpiceEphemeris::load_embedded();
         let authority = authority.unwrap_or_else(|error| {
@@ -545,7 +544,7 @@ mod tests {
     fn capture_utc_override_moves_the_start_epoch_through_the_lsk_authority() {
         let mut simulation_time = SimulationTime::default();
         let leap_seconds = LeapSecondTable::parse_lsk(
-            SpiceEphemeris::load(DEFAULT_EPHEMERIS_MANIFEST_PATH)
+            SpiceEphemeris::load(default_ephemeris_manifest_path())
                 .expect("offline kernels")
                 .leap_seconds_lsk(),
         )

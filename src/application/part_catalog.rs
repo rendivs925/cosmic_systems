@@ -8,10 +8,9 @@ use crate::domain::game::parts::{PartCatalog, PartCatalogError, PartDef};
 use ron::error::SpannedError;
 use ron::extensions::Extensions;
 use ron::Options;
-use std::env;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Location of the shipped part catalog, relative to the asset root.
 pub const PARTS_RELATIVE_PATH: &str = "assets/configs/parts";
@@ -32,15 +31,9 @@ pub fn load_default_part_catalog() -> Result<PartCatalog, PartCatalogLoadError> 
     PartCatalog::new(parts).map_err(PartCatalogLoadError::Invalid)
 }
 
-/// Resolves the parts directory like bevy_asset resolves its asset root.
+/// Resolves the parts directory through the one shipped-asset root policy.
 fn parts_root() -> PathBuf {
-    if let Ok(root) = env::var("BEVY_ASSET_ROOT") {
-        return Path::new(&root).join(PARTS_RELATIVE_PATH);
-    }
-    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
-        return Path::new(&manifest_dir).join(PARTS_RELATIVE_PATH);
-    }
-    PathBuf::from(PARTS_RELATIVE_PATH)
+    crate::domain::services::shipped_paths::resolve(PARTS_RELATIVE_PATH)
 }
 
 #[derive(Debug)]

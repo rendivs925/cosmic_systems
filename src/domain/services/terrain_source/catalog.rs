@@ -8,6 +8,8 @@ use super::{
     LAUNCH_TRENCH_HALF_WIDTH_M, LAUNCH_TRENCH_NEAR_Z_M,
 };
 use super::{ElevationBounds, TerrainSource};
+#[cfg(all(feature = "dem", target_os = "android"))]
+use super::{ProceduralTerrainConfig, ProceduralTerrainSource};
 #[cfg(not(feature = "dem"))]
 use super::{ProceduralTerrainConfig, ProceduralTerrainSource};
 use crate::domain::services::cube_sphere::{PatchGeometricError, TerrainPatch};
@@ -26,6 +28,7 @@ use crate::domain::services::global_raster::GlobalRasterSpec;
 use crate::domain::services::planet_factory::PlanetFactory;
 #[cfg(feature = "dem")]
 use crate::domain::services::reference_frames::geodetic_to_terrain_lat_lon;
+use crate::domain::services::shipped_paths;
 #[cfg(feature = "dem")]
 use crate::domain::value_objects::celestial_body_id::CelestialBodyId;
 #[cfg(feature = "dem")]
@@ -400,23 +403,46 @@ impl EarthTerrainSource {
     pub fn new() -> Self {
         #[cfg(feature = "dem")]
         {
-            // The resident CSDEM is mandatory. The payload pyramid is optional:
-            // a missing or invalid package silently falls back to the current
-            // base+detail composition so no mode depends on the new data.
-            let measured: Arc<dyn TerrainSource> = Arc::new(
-                DemTerrainSource::from_path_with_geoid(
-                    DEFAULT_EARTH_DEM_PATH,
-                    DEFAULT_EARTH_GEOID_PATH,
-                    GlobalRasterSpec::egm2008_geoid_0p5deg(),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("Earth measured terrain authority is unavailable or invalid: {error}")
-                }),
+            // The resident CSDEM is mandatory on desktop. The payload pyramid is
+            // optional: a missing or invalid package silently falls back to the
+            // current base+detail composition so no mode depends on the new data.
+            //
+            // Android installs have no guaranteed on-device copy of the measured
+            // package (it is gitignored and staged only when packaged), so the
+            // mobile build degrades to procedural terrain instead of aborting.
+            let measured = DemTerrainSource::from_path_with_geoid(
+                shipped_paths::resolve(DEFAULT_EARTH_DEM_PATH),
+                shipped_paths::resolve(DEFAULT_EARTH_GEOID_PATH),
+                GlobalRasterSpec::egm2008_geoid_0p5deg(),
             );
+            let measured: Arc<dyn TerrainSource> = match measured {
+                Ok(source) => Arc::new(source),
+                Err(error) => {
+                    #[cfg(target_os = "android")]
+                    {
+                        eprintln!(
+                            "Earth measured terrain unavailable ({error}); \
+                             using procedural terrain"
+                        );
+                        return Self {
+                            source: Arc::new(ProceduralTerrainSource::from_config(
+                                ProceduralTerrainConfig::earth(),
+                            )),
+                            tiles: None,
+                        };
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        panic!(
+                            "Earth measured terrain authority is unavailable or invalid: {error}"
+                        )
+                    }
+                }
+            };
             let fallback = Arc::clone(&measured);
             let roots: Vec<PathBuf> = DEFAULT_EARTH_ELEVATION_MANIFEST_ROOTS
                 .iter()
-                .map(PathBuf::from)
+                .map(shipped_paths::resolve)
                 .filter(|root| root.exists())
                 .collect();
             if roots.is_empty() {
@@ -616,7 +642,7 @@ impl MoonTerrainSource {
     /// Load the reviewed local LOLA CSDEM. Missing data is surfaced to startup
     /// composition so the Moon remains non-landable rather than procedural.
     pub fn new() -> Result<Self, DemError> {
-        Self::with_dem_path(DEFAULT_MOON_DEM_PATH)
+        Self::with_dem_path(shipped_paths::resolve(DEFAULT_MOON_DEM_PATH))
     }
 
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {
@@ -657,7 +683,7 @@ pub struct MarsTerrainSource {
 #[cfg(feature = "dem")]
 impl MarsTerrainSource {
     pub fn new() -> Result<Self, DemError> {
-        Self::with_dem_path(DEFAULT_MARS_DEM_PATH)
+        Self::with_dem_path(shipped_paths::resolve(DEFAULT_MARS_DEM_PATH))
     }
 
     pub fn with_dem_path(path: impl AsRef<Path>) -> Result<Self, DemError> {

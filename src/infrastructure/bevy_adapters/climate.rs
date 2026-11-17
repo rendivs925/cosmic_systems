@@ -6,7 +6,10 @@
 //!
 //! [`AtmosphereSource`]: crate::domain::services::atmosphere::AtmosphereSource
 
-use crate::domain::services::climate::{ClimateLookup, ClimateSample, ClimateSet};
+use crate::domain::services::climate::{
+    ClimateLookup, ClimateSample, ClimateSet, DEFAULT_CLIMATE_DIR,
+};
+use crate::domain::services::shipped_paths;
 use bevy::prelude::*;
 use std::sync::Arc;
 
@@ -65,10 +68,8 @@ impl Default for PresentationWind {
 /// Missing or malformed packages leave the procedural presentation untouched.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_default_climate(mut climate: ResMut<MeasuredClimate>) {
-    use crate::domain::services::climate::DEFAULT_CLIMATE_DIR;
-
-    let directory = std::path::Path::new(DEFAULT_CLIMATE_DIR);
-    let mut paths = match std::fs::read_dir(directory) {
+    let directory = shipped_paths::resolve(DEFAULT_CLIMATE_DIR);
+    let mut paths = match std::fs::read_dir(&directory) {
         Ok(entries) => entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())

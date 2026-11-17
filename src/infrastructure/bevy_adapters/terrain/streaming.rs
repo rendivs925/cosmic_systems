@@ -23,6 +23,7 @@ use crate::domain::services::land_cover::{LandCoverPackage, LandCoverSet};
 use crate::domain::services::reference_frames::{
     body_fixed_to_planet_inertial_rotation, planet_inertial_to_body_fixed,
 };
+use crate::domain::services::shipped_paths;
 use crate::domain::services::soil::{SoilPackage, SoilSet, DEFAULT_SOIL_DIR};
 use crate::domain::services::surface_fields::{
     SurfaceFieldsPackage, SurfaceFieldsSet, DEFAULT_SURFACE_FIELDS_DIR,
@@ -1453,7 +1454,7 @@ pub const DEFAULT_LAND_COVER_DIR: &str = VegetationConfig::DEFAULT.land_cover_di
 /// Browser builds keep the climate-density fallback path.
 #[cfg(feature = "dem")]
 pub(crate) fn load_default_land_cover(mut streaming: ResMut<TerrainStreamingResource>) {
-    let directory = std::path::Path::new(DEFAULT_LAND_COVER_DIR);
+    let directory = shipped_paths::resolve(DEFAULT_LAND_COVER_DIR);
     let Ok(entries) = std::fs::read_dir(directory) else {
         streaming.set_land_cover(None);
         return;
@@ -1492,7 +1493,7 @@ pub(crate) fn load_default_land_cover(mut streaming: ResMut<TerrainStreamingReso
 /// Browser builds keep the source-derived material path unchanged.
 #[cfg(feature = "dem")]
 pub(crate) fn load_default_soil(mut streaming: ResMut<TerrainStreamingResource>) {
-    let directory = std::path::Path::new(DEFAULT_SOIL_DIR);
+    let directory = shipped_paths::resolve(DEFAULT_SOIL_DIR);
     let Ok(entries) = std::fs::read_dir(directory) else {
         streaming.set_soil(None);
         return;
@@ -1527,7 +1528,7 @@ pub(crate) fn load_default_soil(mut streaming: ResMut<TerrainStreamingResource>)
 /// Load the optional measured water/canopy packages at startup (native only).
 #[cfg(feature = "dem")]
 pub(crate) fn load_default_surface_fields(mut streaming: ResMut<TerrainStreamingResource>) {
-    let directory = std::path::Path::new(DEFAULT_SURFACE_FIELDS_DIR);
+    let directory = shipped_paths::resolve(DEFAULT_SURFACE_FIELDS_DIR);
     let Ok(entries) = std::fs::read_dir(directory) else {
         streaming.set_surface_fields(None);
         return;

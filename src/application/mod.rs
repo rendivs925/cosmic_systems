@@ -1,6 +1,9 @@
+pub mod app_builder;
 pub mod craft_startup;
 pub mod headless_scenario;
 pub mod launch_tower;
+#[cfg(target_os = "android")]
+pub mod loading;
 pub mod modes;
 pub mod offscreen_capture;
 pub mod part_catalog;

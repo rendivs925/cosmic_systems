@@ -58,3 +58,6 @@ dist/
 
 # Generated codebase audit graph
 graphify-out/
+
+# Generated Android asset set (see scripts/prepare_android_assets.sh)
+assets-android/
