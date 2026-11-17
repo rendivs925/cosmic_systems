@@ -297,18 +297,38 @@ load/failure counts, warmup frames and duration.
     runs natively because Termux's host triple is the Android target).
   - `cargo apk2 build --lib --profile android` produces a signed, optimized APK.
 - **Loading phase (Android)**: simulation time is paused behind a loading screen
-  until every texture in `assets/textures` is loaded, followed by 90 warmup
-  frames so GPU uploads and shader pipelines finish before interaction. Progress
-  and load/failure counts are written to the startup log.
+  until every texture in `assets/textures` is loaded, followed by at least 15
+  warmup frames / 0.75 s so GPU uploads and shader pipelines finish before
+  interaction. Progress, load/failure counts and the exit reason are written to
+  the startup log.
 - **Touch (Android)**: one-finger drag orbits and zooms the solar camera,
   two-finger pinch zooms, through the same `CameraController` state the desktop
   keyboard path uses.
-- **On-screen readout (Android)**: FPS and frame time in the top-left corner, so
-  liveness and cost are visible without adb.
+- **Per-mode panel (Android)**: solar, craft and rocket bindings are synthesised
+  into `ButtonInput<KeyCode>`, so flight logic is unchanged. Implemented; rocket
+  and craft need on-device verification.
+- **On-screen readout (Android)**: FPS and frame time in the top-left corner, plus
+  a READY badge and a touch counter/dot for on-device diagnosis.
 - **Perf telemetry (Android)**: every 5 s the startup log records `fps`,
-  `avg_ms`, `max_ms`, stall count (>33 ms) and RSS (`mem_mb`).
-- Touch gameplay input for rocket/craft modes is still pending: the solar view
-  is controllable, those modes are not.
-- NativeActivity has no soft-keyboard support.
-- Desktop validation (`cargo run`, `craft`, `rocket`) must run on a desktop or
-  CI: Termux's host target *is* Android, so it cannot exercise the desktop cfg.
+  `avg_ms`, `max_ms`, stall count (>33 ms), RSS (`mem_mb`), window size and the
+  measured control-panel height.
+- **Screen capture (Android)**: opt-in only, because copying the window
+  swapchain is not uniformly supported by Android drivers. Launch with
+  `--ez screenshot true` to write `startup_screenshot.png` into the media
+  directory after 6 s.
+- **NativeActivity has no soft-keyboard support.**
+- **Desktop validation (`cargo run`, `craft`, `rocket`) must run on a desktop or
+  CI**: Termux's host target *is* Android, so it cannot exercise the desktop cfg.
+
+### Missing log after a reinstall
+
+`Android/media/<package>` is owned by the installing UID. If the app is
+uninstalled and reinstalled, Android can leave the old directory behind owned by
+the previous UID; the new process then cannot write there and startup logging
+silently falls back to MediaStore. Remove it once from Termux:
+
+```sh
+rm -rf /sdcard/Android/media/com.rendivs925.cosmicsystems
+```
+
+The next launch recreates it under the current UID.

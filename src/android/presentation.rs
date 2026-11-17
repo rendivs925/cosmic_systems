@@ -92,7 +92,7 @@ fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
             ReadyBadge,
         ))
         .with_child((
-            Text::new("READY · v0.2.3"),
+            Text::new(format!("READY · v{}", env!("CARGO_PKG_VERSION"))),
             TextFont {
                 font_size: FONT_CAPTION,
                 ..default()
@@ -349,8 +349,14 @@ fn capture_startup_screenshot(
     mut commands: Commands,
     real_time: Res<Time<Real>>,
     mut taken: Local<bool>,
+    mut enabled: Local<Option<bool>>,
 ) {
-    if *taken || real_time.elapsed_secs() < 6.0 {
+    // Capturing the window swapchain is not uniformly supported by Android
+    // drivers, so it stays opt-in: `am start ... --ez screenshot true`.
+    let requested = *enabled.get_or_insert_with(|| {
+        diagnostics::intent_extra("screenshot").is_some_and(|value| value == "true" || value == "1")
+    });
+    if !requested || *taken || real_time.elapsed_secs() < 6.0 {
         return;
     }
     *taken = true;

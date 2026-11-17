@@ -87,7 +87,12 @@ fn stage_shipped_assets() {
     let destination = base.join("assets");
     let mut copied = 0usize;
     let mut missing = Vec::new();
-    for path in SHIPPED_FILES {
+    diagnostics::log(&format!(
+        "staging: copying {} shipped files into {}",
+        SHIPPED_FILES.len(),
+        destination.display()
+    ));
+    for (index, path) in SHIPPED_FILES.iter().enumerate() {
         match copy_file(&manager, &destination, path) {
             Ok(true) => copied += 1,
             Ok(false) => missing.push(*path),
@@ -95,6 +100,9 @@ fn stage_shipped_assets() {
                 diagnostics::log(&format!("staging: {path}: error {error}"));
                 missing.push(*path);
             }
+        }
+        if index % 25 == 0 {
+            diagnostics::log(&format!("staging: {index}/{} files", SHIPPED_FILES.len()));
         }
     }
 
