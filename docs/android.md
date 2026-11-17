@@ -276,7 +276,17 @@ rotation reflows the UI instead of recreating (and restarting) the simulation.
 
 The loading screen has a title/subtitle hierarchy, a progress track and counter,
 and an animated phase label driven by `Time<Real>` (virtual simulation time is
-paused). It has a 30 s timeout, so a missing asset can never leave the app stuck.
+paused). It is deadline-driven so it can never sit on “Finalizing renderer”
+forever:
+
+- assets settle when every texture resolves;
+- unresolved assets are abandoned after **30 s**;
+- a tap after **8 s** skips the wait (“Taking longer than expected — tap to
+  continue”);
+- the screen closes unconditionally after **45 s**.
+
+The completion log records the reason (`ready`, `timeout`, `skip`, `deadline`),
+load/failure counts, warmup frames and duration.
 
 ## Current status
 

@@ -3,9 +3,16 @@
 //!
 //! Texture decoding, GPU upload and pipeline compilation are the main sources of
 //! start-up stutter. Holding virtual time paused behind a loading screen lets all
-//! of that finish first. The screen reports progress, an animated phase label
-//! (driven by real time, since virtual time is paused) and a hard timeout so a
-//! missing asset can never leave the app stuck.
+//! of that finish first.
+//!
+//! The phase is deadline-driven so it can never sit on “Finalizing renderer”
+//! forever:
+//! - assets normally settle when every texture resolves;
+//! - after `ASSET_TIMEOUT_SECONDS` pending assets are abandoned;
+//! - after `HARD_DEADLINE_SECONDS` the screen closes unconditionally;
+//! - after `SKIP_AFTER_SECONDS` a tap closes it immediately.
+//!
+//! Animation runs on `Time<Real>` because virtual simulation time is paused.
 
 use bevy::asset::{AssetServer, LoadState};
 use bevy::prelude::*;
@@ -15,12 +22,16 @@ use crate::android::diagnostics;
 use crate::android::theme::*;
 use crate::generated_assets::PRELOAD_TEXTURES;
 
-/// Frames rendered after the last asset resolves, to absorb uploads and shader
-/// pipeline compilation triggered by the first render of each material.
-const WARMUP_FRAMES: u32 = 90;
-
-/// Never block forever: after this long, continue with whatever is ready.
-const LOAD_TIMEOUT_SECONDS: f32 = 30.0;
+/// Minimum warmup before handing over, so the first interactive frames have
+/// their pipelines and uploads done.
+const WARMUP_MIN_FRAMES: u32 = 15;
+const WARMUP_MIN_SECONDS: f32 = 0.75;
+/// Abandon unresolved assets after this long.
+const ASSET_TIMEOUT_SECONDS: f32 = 30.0;
+/// Close the loading screen no matter what after this long.
+const HARD_DEADLINE_SECONDS: f32 = 45.0;
+/// Allow a tap to skip after this long, in case the device is unusually slow.
+const SKIP_AFTER_SECONDS: f32 = 8.0;
 
 pub struct AndroidLoadingPlugin;
 
@@ -28,10 +39,12 @@ pub struct AndroidLoadingPlugin;
 struct Preload {
     images: Vec<Handle<Image>>,
     failed: usize,
-    loaded: usize,
+    settled_at: Option<f32>,
     warmup_frames: u32,
     finished: bool,
     started_at: f32,
+    timed_out: bool,
+    skipped: bool,
 }
 
 #[derive(Component)]
@@ -45,6 +58,9 @@ struct ProgressLabel;
 
 #[derive(Component)]
 struct PhaseLabel;
+
+#[derive(Component)]
+struct HintLabel;
 
 impl Plugin for AndroidLoadingPlugin {
     fn build(&self, app: &mut App) {
@@ -112,7 +128,6 @@ fn begin_loading(
                 },
             ));
 
-            // Progress track.
             root.spawn((
                 Node {
                     width: percent(72),
@@ -158,6 +173,20 @@ fn begin_loading(
                 TextColor(TEXT_PRIMARY),
                 PhaseLabel,
             ));
+            root.spawn((
+                Text::new(""),
+                TextFont {
+                    font: ui_font,
+                    font_size: FONT_CAPTION,
+                    ..default()
+                },
+                TextColor(TEXT_SECONDARY),
+                Node {
+                    margin: UiRect::top(px(SPACE_2)),
+                    ..default()
+                },
+                HintLabel,
+            ));
         });
 }
 
@@ -165,17 +194,24 @@ fn update_loading(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     real_time: Res<Time<Real>>,
+    touches: Res<Touches>,
     mut preload: ResMut<Preload>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut fills: Query<&mut Node, With<ProgressFill>>,
     mut progress_labels: Query<&mut Text, (With<ProgressLabel>, Without<PhaseLabel>)>,
     mut phase_labels: Query<&mut Text, (With<PhaseLabel>, Without<ProgressLabel>)>,
-    roots: Query<Entity, With<LoadingRoot>>,
+    mut hint_labels: Query<
+        &mut Text,
+        (With<HintLabel>, Without<ProgressLabel>, Without<PhaseLabel>),
+    >,
+    mut roots: Query<(Entity, &mut Node), (With<LoadingRoot>, Without<ProgressFill>)>,
 ) {
     if preload.finished {
         return;
     }
+
     let total = preload.images.len().max(1);
+    let elapsed = real_time.elapsed_secs() - preload.started_at;
 
     let mut loaded = 0usize;
     let mut failed = 0usize;
@@ -187,17 +223,26 @@ fn update_loading(
             _ => pending += 1,
         }
     }
-    preload.loaded = loaded;
     preload.failed = failed;
 
-    let elapsed = real_time.elapsed_secs() - preload.started_at;
-    let timed_out = pending > 0 && elapsed >= LOAD_TIMEOUT_SECONDS;
-    if timed_out {
+    // A tap after the skip threshold aborts waiting; a stuck driver should never
+    // trap the user on a loading screen.
+    if preload.settled_at.is_none() && elapsed >= SKIP_AFTER_SECONDS && touches.any_just_pressed() {
+        preload.skipped = true;
+        diagnostics::log("loading: skipped by user tap");
+    }
+
+    let asset_gate = pending == 0 || elapsed >= ASSET_TIMEOUT_SECONDS || preload.skipped;
+    if preload.settled_at.is_none() && asset_gate {
+        if pending > 0 {
+            preload.timed_out = true;
+        }
+        preload.settled_at = Some(elapsed);
         diagnostics::log(&format!(
-            "loading: timeout after {elapsed:.1}s with {pending} textures pending; continuing"
+            "loading: assets settled after {elapsed:.1}s ({loaded} loaded, {failed} failed, {pending} pending{})",
+            if preload.skipped { ", skipped" } else { "" }
         ));
     }
-    let settled = pending == 0 || timed_out;
 
     // Progress bar and counters.
     let resolved = loaded + failed;
@@ -213,8 +258,7 @@ fn update_loading(
         };
     }
 
-    // Animated phase label: real time keeps moving while virtual time is paused,
-    // so the screen never looks frozen.
+    let settled = preload.settled_at.is_some();
     let dots = 1 + (real_time.elapsed_secs() * 2.0) as usize % 3;
     let phase = if settled {
         "Finalizing renderer"
@@ -224,24 +268,46 @@ fn update_loading(
     for mut text in &mut phase_labels {
         text.0 = format!("{phase}{}", ".".repeat(dots));
     }
+    for mut text in &mut hint_labels {
+        text.0 = if !settled && elapsed >= SKIP_AFTER_SECONDS {
+            "Taking longer than expected — tap to continue".to_string()
+        } else {
+            String::new()
+        };
+    }
 
     if !settled {
         return;
     }
 
+    let settled_at = preload.settled_at.unwrap_or(elapsed);
     preload.warmup_frames += 1;
-    if preload.warmup_frames < WARMUP_FRAMES {
+    let warm =
+        preload.warmup_frames >= WARMUP_MIN_FRAMES && elapsed - settled_at >= WARMUP_MIN_SECONDS;
+    let forced = elapsed >= HARD_DEADLINE_SECONDS;
+    if !warm && !forced {
         return;
     }
 
-    for entity in &roots {
+    // Hide first, then despawn: even if the layout children outlive the root for
+    // a frame, the screen cannot remain visible.
+    for (entity, mut node) in &mut roots {
+        node.display = Display::None;
         commands.entity(entity).despawn();
     }
     virtual_time.unpause();
     preload.finished = true;
-    let total_elapsed = real_time.elapsed_secs() - preload.started_at;
     diagnostics::log(&format!(
-        "loading: complete in {total_elapsed:.1}s ({loaded} loaded, {failed} failed, {} warmup frames)",
-        preload.warmup_frames
+        "loading: complete in {elapsed:.1}s ({loaded} loaded, {failed} failed, {} warmup frames, reason={})",
+        preload.warmup_frames,
+        if forced {
+            "deadline"
+        } else if preload.skipped {
+            "skip"
+        } else if preload.timed_out {
+            "timeout"
+        } else {
+            "ready"
+        }
     ));
 }
