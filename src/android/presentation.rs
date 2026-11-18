@@ -24,47 +24,17 @@ struct TouchState {
     pinch_distance: Option<f32>,
 }
 
-/// Small onboarding pill in the top-left corner. Auto-dismisses after the first
-/// touch or after a fixed timeout — players should not see it for long.
-#[derive(Component)]
-struct OnboardingHint;
 
-/// How long the onboarding hint stays visible after first appearance.
-const ONBOARDING_AUTO_DISMISS_SECS: f32 = 6.0;
 
 /// Register the Android-only presentation systems.
 pub fn install(app: &mut App) {
     app.add_systems(Startup, spawn_overlays)
-        .add_systems(Update, (touch_camera_controls, update_onboarding_hint));
+        .add_systems(Update, touch_camera_controls);
 }
 
-fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let ui_font: Handle<Font> = asset_server.load(FONT_PATH);
-
-    // Onboarding hint: a compact pill that teaches the core gesture vocabulary.
-    // Auto-hides on first touch or after the timeout.
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(SAFE_TOP + SPACE_3),
-                left: px(SPACE_3),
-                padding: UiRect::new(px(SPACE_3), px(SPACE_3), px(SPACE_2), px(SPACE_2)),
-                ..default()
-            },
-            BackgroundColor(SURFACE_PANEL),
-            BorderRadius::all(px(RADIUS_MD)),
-            OnboardingHint,
-        ))
-        .with_child((
-            Text::new("Drag to look · Pinch to zoom · Tap to select"),
-            TextFont {
-                font: ui_font,
-                font_size: FONT_CAPTION,
-                ..default()
-            },
-            TextColor(TEXT_SECONDARY),
-        ));
+fn spawn_overlays(_commands: Commands, _asset_server: Res<AssetServer>) {
+    // Onboarding hint removed for mobile - UI should be self-explanatory
+    // No "drag to look" or similar hints on mobile devices
 }
 
 /// One-finger drag looks/orbits; two-finger pinch zooms (or dollies in free
@@ -75,7 +45,7 @@ fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// and cards from being unresponsive on mobile.
 fn touch_camera_controls(
     touches: Res<Touches>,
-    ui_captures: Query<(&Node, &GlobalTransform, &ComputedNode), With<UiCapture>>,
+    ui_captures: Query<(&Node, &GlobalTransform, &ComputedNode, &Interaction), With<UiCapture>>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
@@ -170,53 +140,29 @@ fn touch_camera_controls(
     }
 }
 
-/// Dismiss the onboarding hint on first touch, or automatically after a timeout.
-fn update_onboarding_hint(
-    touches: Res<Touches>,
-    real_time: Res<Time<Real>>,
-    mut hints: Query<(Entity, &mut Node), With<OnboardingHint>>,
-    mut shown_at: Local<Option<f32>>,
-    mut dismissed: Local<bool>,
-) {
-    if *dismissed {
-        return;
-    }
-    if shown_at.is_none() {
-        *shown_at = Some(real_time.elapsed_secs());
-    }
-    let elapsed = real_time.elapsed_secs() - shown_at.unwrap();
-    if touches.any_just_pressed() || elapsed >= ONBOARDING_AUTO_DISMISS_SECS {
-        *dismissed = true;
-        for (_entity, mut node) in &mut hints {
-            node.display = Display::None;
-        }
-    }
-}
 
-/// Check if a touch position is over any UI element that captures input.
-/// This prevents camera controls from interfering with button interactions.
+
+/// Check if a touch position is over any UI element.
 fn is_touch_over_ui(
     touch_pos: Vec2,
-    ui_captures: &Query<(&Node, &GlobalTransform, &ComputedNode), With<UiCapture>>,
+    ui_captures: &Query<(&Node, &GlobalTransform, &ComputedNode, &Interaction), With<UiCapture>>,
 ) -> bool {
-    for (node, global_transform, computed) in ui_captures.iter() {
-        // Skip hidden UI elements
+    for (node, transform, computed, interaction) in ui_captures.iter() {
+        // Only check visible UI elements
         if node.display == Display::None {
             continue;
         }
         
-        // Get the computed size
-        let size = computed.size();
-        
-        // Get the translation from the global transform
-        let translation = global_transform.translation();
-        let position = Vec2::new(translation.x, translation.y);
-        
-        // Create bounds rect centered on the position
-        let bounds = Rect::from_center_size(position, size);
-        
-        if bounds.contains(touch_pos) {
-            return true;
+        // Check if this UI element is being interacted with
+        if *interaction != Interaction::None {
+            let size = computed.size();
+            let translation = transform.translation();
+            let position = Vec2::new(translation.x, translation.y);
+            let bounds = Rect::from_center_size(position, size);
+            
+            if bounds.contains(touch_pos) {
+                return true;
+            }
         }
     }
     false
