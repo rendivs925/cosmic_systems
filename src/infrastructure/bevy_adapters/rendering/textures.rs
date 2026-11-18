@@ -234,7 +234,16 @@ pub fn asset_exists(path: &str) -> bool {
         true
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    {
+        // On Android, assets are bundled in the APK and accessed through Bevy's
+        // asset system. We can't check the filesystem, so we trust that configured
+        // texture paths exist. Bevy's AssetServer will handle missing assets gracefully.
+        let _ = path;
+        true
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets")

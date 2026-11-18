@@ -38,12 +38,12 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
             .spawn((
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(32.0), // More compact height
+                    height: Val::Px(56.0), // Larger height for mobile touch targets
                     padding: UiRect::new(
-                        Val::Px(8.0), // Reduced padding
+                        Val::Px(12.0),
+                        Val::Px(12.0),
                         Val::Px(8.0),
-                        Val::Px(2.0),
-                        Val::Px(2.0),
+                        Val::Px(8.0),
                     ),
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
@@ -56,7 +56,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
                 bar.spawn(Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0), // More compact spacing
+                    column_gap: Val::Px(12.0), // More spacing between buttons
                     ..default()
                 })
                 .with_children(|menu| {
@@ -108,15 +108,16 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
             container
                 .spawn((
                     Node {
-                        width: Val::Px(500.0), // More compact width
+                        width: Val::Px(500.0),
+                        max_width: Val::Percent(90.0), // Responsive width
                         padding: UiRect::new(
-                            Val::Px(12.0), // Reduced padding
+                            Val::Px(16.0),
+                            Val::Px(16.0),
                             Val::Px(12.0),
-                            Val::Px(10.0),
-                            Val::Px(10.0),
+                            Val::Px(12.0),
                         ),
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(6.0), // Tighter spacing
+                        row_gap: Val::Px(8.0),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.75)), // More minimal background
@@ -127,7 +128,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
                     panel.spawn((
                         Text::new("Select Body"),
                         TextFont {
-                            font_size: 10.0,
+                            font_size: 14.0,
                             ..default()
                         },
                         TextColor(Color::srgb(0.75, 0.8, 0.85)),
@@ -136,7 +137,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
                     panel.spawn((
                         Text::new("All Bodies"),
                         TextFont {
-                            font_size: 10.5,
+                            font_size: 13.0,
                             ..default()
                         },
                         TextColor(Color::srgb(0.51, 0.59, 0.71)),
@@ -199,7 +200,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
         parent.spawn((
             Text::new(""),
             TextFont {
-                font_size: 13.0,
+                font_size: 16.0,
                 ..default()
             },
             TextColor(Color::srgb(0.82, 0.87, 0.92)),
@@ -208,7 +209,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
         parent.spawn((
             Text::new(""),
             TextFont {
-                font_size: 9.0,
+                font_size: 12.0,
                 ..default()
             },
             TextColor(Color::srgb(0.55, 0.62, 0.72)),
@@ -234,8 +235,8 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
                 position_type: PositionType::Absolute,
                 right: Val::Px(20.0),
                 top: Val::Px(20.0),
-                width: Val::Px(26.0),
-                height: Val::Px(26.0),
+                width: Val::Px(44.0),  // Larger touch target (44x44 is iOS recommended)
+                height: Val::Px(44.0),
                 border: UiRect::all(Val::Px(1.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,

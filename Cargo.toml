@@ -2,7 +2,7 @@
 
 [package]
 name = "cosmic_systems"
-version = "0.3.3"
+version = "0.3.5"
 edition = "2021"
 default-run = "cosmic_systems"
 

@@ -20,9 +20,9 @@ pub fn spawn_menu_button(
     primary: bool,
 ) {
     let padding = if primary {
-        UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(5.0), Val::Px(5.0))
+        UiRect::new(Val::Px(16.0), Val::Px(16.0), Val::Px(10.0), Val::Px(10.0))
     } else {
-        UiRect::new(Val::Px(8.0), Val::Px(8.0), Val::Px(4.0), Val::Px(4.0))
+        UiRect::new(Val::Px(14.0), Val::Px(14.0), Val::Px(8.0), Val::Px(8.0))
     };
     let radius = if primary { 16.0 } else { 12.0 };
 
@@ -41,7 +41,7 @@ pub fn spawn_menu_button(
             UiCapture,
         ))
         .with_children(|button| {
-            let (font, color) = text_style(9.5, Color::srgb(0.75, 0.8, 0.85));
+            let (font, color) = text_style(14.0, Color::srgb(0.75, 0.8, 0.85)); // Larger font
             button.spawn((Text::new(label), font, color));
         });
 }
@@ -52,7 +52,7 @@ pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, _group: N
             Button,
             Node {
                 border: UiRect::all(Val::Px(0.5)),
-                padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(2.0), Val::Px(2.0)),
+                padding: UiRect::new(Val::Px(10.0), Val::Px(10.0), Val::Px(6.0), Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(nav_button_color(false)),
@@ -64,7 +64,7 @@ pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, _group: N
             UiCapture,
         ))
         .with_children(|button| {
-            let (font, color) = text_style(9.0, Color::srgb(0.75, 0.8, 0.85));
+            let (font, color) = text_style(12.0, Color::srgb(0.75, 0.8, 0.85)); // Larger font
             button.spawn((Text::new(name), font, color, NavButtonLabel));
         });
 }
@@ -73,7 +73,7 @@ pub fn info_body_text(text: &str) -> (Text, TextFont, TextColor) {
     (
         Text::new(text),
         TextFont {
-            font_size: 9.5,
+            font_size: 12.0,
             ..default()
         },
         TextColor(Color::srgb(0.82, 0.85, 0.88)),
