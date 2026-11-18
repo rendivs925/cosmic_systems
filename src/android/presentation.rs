@@ -14,8 +14,6 @@ use bevy::math::Dir3;
 use bevy::prelude::*;
 use bevy::time::Real;
 
-use crate::android::controls::ControlPanelExtent;
-use crate::android::diagnostics;
 use crate::android::theme::*;
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
 
@@ -73,29 +71,14 @@ fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// the desktop input path uses.
 fn touch_camera_controls(
     touches: Res<Touches>,
-    windows: Query<&Window>,
-    extent: Res<ControlPanelExtent>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
-    let panel_top = match windows.single() {
-        Ok(window) => {
-            // Never reserve more than half the height: a wrong panel
-            // measurement must not disable camera control entirely.
-            let reserved = extent.0.clamp(0.0, window.height() * 0.5);
-            window.height() - reserved
-        }
-        Err(_) => f32::MAX,
-    };
-
     // Collect at most two positions without allocating every frame.
     let mut first = Vec2::ZERO;
     let mut second = Vec2::ZERO;
     let mut count = 0usize;
     for touch in touches.iter() {
-        if touch.start_position().y > panel_top {
-            continue;
-        }
         match count {
             0 => first = touch.position(),
             1 => second = touch.position(),
@@ -191,7 +174,7 @@ fn update_onboarding_hint(
     let elapsed = real_time.elapsed_secs() - shown_at.unwrap();
     if touches.any_just_pressed() || elapsed >= ONBOARDING_AUTO_DISMISS_SECS {
         *dismissed = true;
-        for (entity, mut node) in &mut hints {
+        for (_entity, mut node) in &mut hints {
             node.display = Display::None;
         }
     }

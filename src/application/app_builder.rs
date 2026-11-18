@@ -197,8 +197,11 @@ pub fn build_app(options: LaunchOptions) -> App {
         // which is right for a static menu but freezes a continuously
         // animating simulation. The simulator needs a continuous loop.
         app.insert_resource(bevy::winit::WinitSettings::continuous());
-        app.add_plugins(crate::application::loading::AndroidLoadingPlugin);
+        // Loading screen temporarily disabled for diagnostics
+        // app.add_plugins(crate::application::loading::AndroidLoadingPlugin);
         app.add_systems(Update, (android_presentation_defaults, android_diagnostics));
+        // Install touch camera controls and presentation
+        crate::android::presentation::install(&mut app);
     }
 
     if let Some(capture) = offscreen {
@@ -277,7 +280,6 @@ fn android_diagnostics(
     cameras: Query<&Msaa>,
     lights: Query<&DirectionalLight>,
     windows: Query<&Window>,
-    panel: Res<crate::android::controls::ControlPanelExtent>,
     mut state: Local<AndroidDiagnosticsState>,
 ) {
     use crate::android::diagnostics;
@@ -319,11 +321,10 @@ fn android_diagnostics(
                 .map(|window| (window.width(), window.height()))
                 .unwrap_or((0.0, 0.0));
             diagnostics::log(&format!(
-                "perf: fps={fps:.1} avg_ms={:.2} max_ms={:.2} stalls={} mem_mb={memory} window={width:.0}x{height:.0} panel_h={:.0}",
+                "perf: fps={fps:.1} avg_ms={:.2} max_ms={:.2} stalls={} mem_mb={memory} window={width:.0}x{height:.0}",
                 1000.0 / fps.max(0.001),
                 state.max_delta_s * 1000.0,
-                state.stalls,
-                panel.0
+                state.stalls
             ));
         }
         state.samples += 1;

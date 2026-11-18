@@ -9,7 +9,7 @@
 
 pub(crate) mod controls;
 pub(crate) mod diagnostics;
-mod presentation;
+pub mod presentation;
 pub(crate) mod theme;
 
 use bevy::prelude::bevy_main;
@@ -47,7 +47,8 @@ pub fn main() {
     options.mode = mode;
     let mut app = build_app(options);
     presentation::install(&mut app);
-    controls::install(&mut app, mode);
+    // Disable control panel on Android - use touch camera instead
+    // controls::install(&mut app, mode);
     diagnostics::log("entry: app built, entering event loop");
     app.run();
     diagnostics::log("entry: event loop returned");
