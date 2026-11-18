@@ -16,6 +16,7 @@ use bevy::time::Real;
 
 use crate::android::theme::*;
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
+use crate::presentation::ui_components::UiCapture;
 
 #[derive(Default)]
 struct TouchState {
@@ -69,19 +70,31 @@ fn spawn_overlays(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// One-finger drag looks/orbits; two-finger pinch zooms (or dollies in free
 /// flight). Both write through the same `CameraController` / `Transform` state
 /// the desktop input path uses.
+///
+/// Touches that start on UI elements are ignored to prevent buttons, menus,
+/// and cards from being unresponsive on mobile.
 fn touch_camera_controls(
     touches: Res<Touches>,
+    ui_captures: Query<(&Node, &GlobalTransform, &ComputedNode), With<UiCapture>>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
     // Collect at most two positions without allocating every frame.
+    // Skip touches that are over UI elements to allow button interactions.
     let mut first = Vec2::ZERO;
     let mut second = Vec2::ZERO;
     let mut count = 0usize;
     for touch in touches.iter() {
+        let pos = touch.position();
+        
+        // Skip touches that are over UI elements
+        if is_touch_over_ui(pos, &ui_captures) {
+            continue;
+        }
+        
         match count {
-            0 => first = touch.position(),
-            1 => second = touch.position(),
+            0 => first = pos,
+            1 => second = pos,
             _ => {}
         }
         count += 1;
@@ -178,4 +191,33 @@ fn update_onboarding_hint(
             node.display = Display::None;
         }
     }
+}
+
+/// Check if a touch position is over any UI element that captures input.
+/// This prevents camera controls from interfering with button interactions.
+fn is_touch_over_ui(
+    touch_pos: Vec2,
+    ui_captures: &Query<(&Node, &GlobalTransform, &ComputedNode), With<UiCapture>>,
+) -> bool {
+    for (node, global_transform, computed) in ui_captures.iter() {
+        // Skip hidden UI elements
+        if node.display == Display::None {
+            continue;
+        }
+        
+        // Get the computed size
+        let size = computed.size();
+        
+        // Get the translation from the global transform
+        let translation = global_transform.translation();
+        let position = Vec2::new(translation.x, translation.y);
+        
+        // Create bounds rect centered on the position
+        let bounds = Rect::from_center_size(position, size);
+        
+        if bounds.contains(touch_pos) {
+            return true;
+        }
+    }
+    false
 }
