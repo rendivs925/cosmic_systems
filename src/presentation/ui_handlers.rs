@@ -376,24 +376,53 @@ pub(crate) fn update_cursor_icon(
 #[cfg(target_os = "android")]
 pub(crate) fn update_ui_touch_interactions(
     touches: Res<bevy::input::touch::Touches>,
-    mut ui_interactions: Query<(
-        Entity,
-        &mut Interaction,
-        &Node,
-        &GlobalTransform,
-        &ComputedNode,
+    mut ui_interactions: ParamSet<(
+        // First param: reset interactions
+        Query<(
+            Entity,
+            &mut Interaction,
+            &Node,
+            &GlobalTransform,
+            &ComputedNode,
+            Option<&UiCapture>,
+        )>,
+        // Second param: check just-pressed touches
+        Query<(
+            Entity,
+            &mut Interaction,
+            &Node,
+            &GlobalTransform,
+            &ComputedNode,
+            Option<&UiCapture>,
+        )>,
+        // Third param: check held touches
+        Query<(
+            Entity,
+            &mut Interaction,
+            &Node,
+            &GlobalTransform,
+            &ComputedNode,
+            Option<&UiCapture>,
+        )>,
     )>,
 ) {
-    // Reset all interactions to None first
-    for (_entity, mut interaction, _node, _transform, _computed) in ui_interactions.iter_mut() {
-        *interaction = Interaction::None;
+    // Reset all UI-captured interactions to None first
+    for (_entity, mut interaction, _node, _transform, _computed, ui_capture) in ui_interactions.p0().iter_mut() {
+        if ui_capture.is_some() {
+            *interaction = Interaction::None;
+        }
     }
     
     // Check touches that are just pressed
     for touch in touches.iter_just_pressed() {
         let touch_pos = touch.position();
         
-        for (entity, mut interaction, node, transform, computed) in ui_interactions.iter_mut() {
+        for (entity, mut interaction, node, transform, computed, ui_capture) in ui_interactions.p1().iter_mut() {
+            // Only interact with UI-captured elements
+            if ui_capture.is_none() {
+                continue;
+            }
+            
             // Skip hidden UI elements
             if node.display == Display::None {
                 continue;
@@ -420,7 +449,12 @@ pub(crate) fn update_ui_touch_interactions(
     for touch in touches.iter() {
         let touch_pos = touch.position();
         
-        for (entity, mut interaction, node, transform, computed) in ui_interactions.iter_mut() {
+        for (entity, mut interaction, node, transform, computed, ui_capture) in ui_interactions.p2().iter_mut() {
+            // Only interact with UI-captured elements
+            if ui_capture.is_none() {
+                continue;
+            }
+            
             // Skip hidden UI elements
             if node.display == Display::None {
                 continue;
