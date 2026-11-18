@@ -196,6 +196,7 @@ use crate::infrastructure::bevy_adapters::ui_components::{
     VideoRecordingState, ZenMode,
 };
 use crate::presentation::ui::*;
+use crate::presentation::ui_handlers::update_ui_touch_interactions;
 use crate::presentation::ui_setup::setup_ui;
 
 /// A paused simulation must not keep advancing its fixed physics pipeline.
@@ -360,6 +361,8 @@ impl Plugin for SolarSystemModePlugin {
         app.add_systems(
             Update,
             (
+                #[cfg(target_os = "android")]
+                update_ui_touch_interactions,
                 handle_solar_system_input,
                 handle_planet_selection,
                 handle_mouse_planet_selection,

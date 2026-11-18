@@ -369,3 +369,82 @@ pub(crate) fn update_cursor_icon(
         .entity(window_entity)
         .insert(CursorIcon::System(new_cursor));
 }
+
+/// Convert touch events to UI interactions on mobile/Android.
+/// This system runs before `handle_nav_interactions` to ensure touch input
+/// properly updates UI button states on mobile devices.
+#[cfg(target_os = "android")]
+pub(crate) fn update_ui_touch_interactions(
+    touches: Res<bevy::input::touch::Touches>,
+    mut ui_interactions: Query<(
+        Entity,
+        &mut Interaction,
+        &Node,
+        &GlobalTransform,
+        &ComputedNode,
+    )>,
+) {
+    // Reset all interactions to None first
+    for (_entity, mut interaction, _node, _transform, _computed) in ui_interactions.iter_mut() {
+        *interaction = Interaction::None;
+    }
+    
+    // Check touches that are just pressed
+    for touch in touches.iter_just_pressed() {
+        let touch_pos = touch.position();
+        
+        for (entity, mut interaction, node, transform, computed) in ui_interactions.iter_mut() {
+            // Skip hidden UI elements
+            if node.display == Display::None {
+                continue;
+            }
+            
+            // Get the computed size and position
+            let size = computed.size();
+            let translation = transform.translation();
+            let position = Vec2::new(translation.x, translation.y);
+            
+            // Create bounds rect
+            let bounds = Rect::from_center_size(position, size);
+            
+            // Check if touch is within this UI element
+            if bounds.contains(touch_pos) {
+                // Set to Pressed for touches that just started
+                *interaction = Interaction::Pressed;
+                break; // Only interact with topmost element
+            }
+        }
+    }
+    
+    // Check touches that are currently pressed (held)
+    for touch in touches.iter() {
+        let touch_pos = touch.position();
+        
+        for (entity, mut interaction, node, transform, computed) in ui_interactions.iter_mut() {
+            // Skip hidden UI elements
+            if node.display == Display::None {
+                continue;
+            }
+            
+            // Skip if already set to Pressed by iter_just_pressed
+            if *interaction == Interaction::Pressed {
+                continue;
+            }
+            
+            // Get the computed size and position
+            let size = computed.size();
+            let translation = transform.translation();
+            let position = Vec2::new(translation.x, translation.y);
+            
+            // Create bounds rect
+            let bounds = Rect::from_center_size(position, size);
+            
+            // Check if touch is within this UI element
+            if bounds.contains(touch_pos) {
+                // Set to Hovered for touches that are being held
+                *interaction = Interaction::Hovered;
+                break; // Only interact with topmost element
+            }
+        }
+    }
+}
