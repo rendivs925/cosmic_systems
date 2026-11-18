@@ -197,6 +197,7 @@ pub fn build_app(options: LaunchOptions) -> App {
         // which is right for a static menu but freezes a continuously
         // animating simulation. The simulator needs a continuous loop.
         app.insert_resource(bevy::winit::WinitSettings::continuous());
+        // Frame rate is limited by AutoVsync present mode (60 FPS on most devices)
         // Loading screen temporarily disabled for diagnostics
         // app.add_plugins(crate::application::loading::AndroidLoadingPlugin);
         app.add_systems(Update, (android_presentation_defaults, android_diagnostics));
