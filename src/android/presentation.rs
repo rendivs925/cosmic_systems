@@ -52,7 +52,7 @@ fn touch_camera_controls(
         let pos = touch.position();
         
         // Skip touches that are over UI elements
-        if is_touch_over_ui(pos, windows, &ui_captures) {
+        if is_touch_over_ui(pos, &windows, &ui_captures) {
             continue;
         }
         
@@ -140,11 +140,11 @@ fn touch_camera_controls(
 /// Uses Bevy's built-in contains_point method for accurate bounds checking.
 fn is_touch_over_ui(
     touch_pos: Vec2,
-    windows: Query<&bevy::window::Window>,
-    ui_captures: Query<(&Node, &ComputedNode, &bevy::ui::UiGlobalTransform), With<UiCapture>>,
+    windows: &Query<&bevy::window::Window>,
+    ui_captures: &Query<(&Node, &ComputedNode, &bevy::ui::UiGlobalTransform), With<UiCapture>>,
 ) -> bool {
     // Get the primary window for coordinate conversion
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return false;
     };
     

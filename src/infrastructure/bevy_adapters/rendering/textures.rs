@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use std::f32::consts::TAU;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 use std::path::Path;
 
 pub struct PlanetTextureSet {
