@@ -210,9 +210,9 @@ fn update_loading(
     mut preload: ResMut<Preload>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut roots: Query<(Entity, &mut BackgroundColor, &mut Node), (With<LoadingRoot>, Without<SkipHint>, Without<PulseIndicator>)>,
-    mut pulses: Query<&mut Node, (With<PulseIndicator>, Without<LoadingRoot>)>,
+    mut pulses: Query<&mut Node, (With<PulseIndicator>, Without<LoadingRoot>, Without<SkipHint>)>,
     mut tips: Query<&mut Text, With<TipLabel>>,
-    mut skip_hints: Query<&mut Node, (With<SkipHint>, Without<LoadingRoot>)>,
+    mut skip_hints: Query<&mut Node, (With<SkipHint>, Without<LoadingRoot>, Without<PulseIndicator>)>,
 ) {
     // --- Animated pulse (runs on real time, independent of loading state). ---
     let elapsed = real_time.elapsed_secs() - preload.started_at;
