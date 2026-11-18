@@ -39,6 +39,7 @@ pub fn spawn_menu_button(
             BorderRadius::all(Val::Px(radius)),
             MenuButton { action, primary },
             UiCapture,
+            Interaction::default(),
         ))
         .with_children(|button| {
             let (font, color) = text_style(14.0, Color::srgb(0.75, 0.8, 0.85)); // Larger font
@@ -62,6 +63,7 @@ pub fn spawn_nav_button(parent: &mut ChildSpawnerCommands, name: &str, _group: N
                 name: name.to_string(),
             },
             UiCapture,
+            Interaction::default(),
         ))
         .with_children(|button| {
             let (font, color) = text_style(12.0, Color::srgb(0.75, 0.8, 0.85)); // Larger font

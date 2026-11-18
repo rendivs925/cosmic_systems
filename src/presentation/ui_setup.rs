@@ -248,6 +248,7 @@ pub fn setup_ui(mut commands: Commands, ui_cameras: Query<(), With<Camera2d>>) {
             InfoCardToggleButton,
             InfoCardExternalToggle,
             UiCapture,
+            Interaction::default(),
         ))
         .with_children(|button| {
             button

@@ -1,19 +1,16 @@
-//! Android presentation: touch camera control and a subtle onboarding hint.
-//!
-//! Debug overlays (FPS, touch counter, finger dot, READY badge) are not shown
-//! — a shipped product never exposes raw engine diagnostics to the player.
-//! The same metrics continue to be written to the on-device startup log for
-//! engineering use.
+//! Android presentation: touch camera control and UI interaction.
 //!
 //! The desktop camera is driven by keyboard and mouse; Android has neither, so
 //! the solar view spawns in `FreeFlight` mode and touch supports that mode as
 //! well as the orbital mode used when a body is framed.
+//!
+//! Touch input is converted to UI interactions to enable button presses on mobile.
 
-use bevy::input::touch::Touches;
+use bevy::input::touch::{TouchInput, TouchPhase};
 use bevy::math::Dir3;
 use bevy::prelude::*;
+use bevy::ui::{UiGlobalTransform, UiSystems};
 
-use crate::android::theme::*;
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
 use crate::presentation::ui_components::UiCapture;
 
@@ -23,39 +20,140 @@ struct TouchState {
     pinch_distance: Option<f32>,
 }
 
-
-
 /// Register the Android-only presentation systems.
 pub fn install(app: &mut App) {
-    app.add_systems(Update, touch_camera_controls);
+    app.add_systems(
+        PreUpdate,
+        android_touch_to_ui_interaction.before(UiSystems::Focus),
+    )
+    .add_systems(Update, touch_camera_controls);
+}
+
+/// Convert Android touch events to UI Interaction states.
+/// This system runs before Bevy's ui_focus_system to ensure touch input
+/// properly updates UI button states on Android devices.
+///
+/// The system:
+/// 1. Reads all touch events
+/// 2. Converts touch positions to UI coordinate space
+/// 3. Uses ComputedNode::contains_point() for accurate hit testing
+/// 4. Sets Interaction components on touched UI nodes
+fn android_touch_to_ui_interaction(
+    mut touch_events: MessageReader<TouchInput>,
+    windows: Query<&Window>,
+    ui_nodes: Query<
+        (Entity, &ComputedNode, &UiGlobalTransform, Option<&Interaction>),
+        With<UiCapture>,
+    >,
+    mut commands: Commands,
+) {
+    // Get the primary window for coordinate conversion
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let scale_factor = window.scale_factor();
+    let window_size = window.physical_size();
+
+    // Track which nodes are currently touched
+    let mut touched_nodes: Vec<Entity> = Vec::new();
+
+    // Process all touch events
+    for touch in touch_events.read() {
+        let touch_pos = touch.position;
+
+        // Convert touch position from logical pixels (origin top-left, Y down)
+        // to UI coordinate space (origin center, Y up) in physical pixels
+        let ui_touch_pos = Vec2::new(
+            touch_pos.x * scale_factor - window_size.x as f32 / 2.0,
+            window_size.y as f32 / 2.0 - touch_pos.y * scale_factor,
+        );
+
+        // Find which UI node is under this touch
+        for (entity, computed, transform, interaction) in ui_nodes.iter() {
+            // Use Bevy's built-in contains_point method for accurate hit testing
+            if computed.contains_point(*transform, ui_touch_pos) {
+                touched_nodes.push(entity);
+
+                // Set interaction state based on touch phase
+                match touch.phase {
+                    TouchPhase::Started => {
+                        if let Some(current) = interaction {
+                            if *current != Interaction::Pressed {
+                                commands.entity(entity).insert(Interaction::Pressed);
+                            }
+                        } else {
+                            commands.entity(entity).insert(Interaction::Pressed);
+                        }
+                    }
+                    TouchPhase::Moved | TouchPhase::Canceled => {
+                        if let Some(current) = interaction {
+                            if *current == Interaction::Pressed {
+                                commands.entity(entity).insert(Interaction::Hovered);
+                            }
+                        }
+                    }
+                    TouchPhase::Ended => {
+                        // Clear interaction when touch ends
+                        commands.entity(entity).insert(Interaction::None);
+                    }
+                }
+            }
+        }
+    }
+
+    // Clear interaction on nodes that are no longer touched
+    for (entity, _computed, _transform, interaction) in ui_nodes.iter() {
+        if let Some(current) = interaction {
+            if *current != Interaction::None && !touched_nodes.contains(&entity) {
+                commands.entity(entity).insert(Interaction::None);
+            }
+        }
+    }
 }
 
 /// One-finger drag looks/orbits; two-finger pinch zooms (or dollies in free
 /// flight). Both write through the same `CameraController` / `Transform` state
 /// the desktop input path uses.
 ///
-/// Touches that start on UI elements are ignored to prevent buttons, menus,
+/// Touches that are over UI elements are ignored to prevent buttons, menus,
 /// and cards from being unresponsive on mobile.
 fn touch_camera_controls(
     touches: Res<Touches>,
-    windows: Query<&bevy::window::Window>,
-    ui_captures: Query<(&Node, &ComputedNode, &bevy::ui::UiGlobalTransform), With<UiCapture>>,
+    windows: Query<&Window>,
+    ui_nodes: Query<(&ComputedNode, &UiGlobalTransform), With<UiCapture>>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
+    // Get window for coordinate conversion
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let scale_factor = window.scale_factor();
+    let window_size = window.physical_size();
+
     // Collect at most two positions without allocating every frame.
     // Skip touches that are over UI elements to allow button interactions.
     let mut first = Vec2::ZERO;
     let mut second = Vec2::ZERO;
     let mut count = 0usize;
+
     for touch in touches.iter() {
         let pos = touch.position();
-        
-        // Skip touches that are over UI elements
-        if is_touch_over_ui(pos, &windows, &ui_captures) {
+
+        // Convert touch position to UI coordinate space for hit testing
+        let ui_pos = Vec2::new(
+            pos.x * scale_factor - window_size.x as f32 / 2.0,
+            window_size.y as f32 / 2.0 - pos.y * scale_factor,
+        );
+
+        // Check if this touch is over any UI element
+        let is_over_ui = is_touch_over_ui(ui_pos, &ui_nodes);
+
+        if is_over_ui {
             continue;
         }
-        
+
         match count {
             0 => first = pos,
             1 => second = pos,
@@ -134,33 +232,13 @@ fn touch_camera_controls(
     }
 }
 
-
-
-/// Check if a touch position is over any UI element.
+/// Check if a touch position (in UI coordinate space) is over any UI element.
 /// Uses Bevy's built-in contains_point method for accurate bounds checking.
 fn is_touch_over_ui(
-    touch_pos: Vec2,
-    windows: &Query<&bevy::window::Window>,
-    ui_captures: &Query<(&Node, &ComputedNode, &bevy::ui::UiGlobalTransform), With<UiCapture>>,
+    ui_touch_pos: Vec2,
+    ui_nodes: &Query<(&ComputedNode, &UiGlobalTransform), With<UiCapture>>,
 ) -> bool {
-    // Get the primary window for coordinate conversion
-    let Ok(window) = windows.single() else {
-        return false;
-    };
-    
-    // Convert touch coordinates (origin top-left, Y down) to UI coordinates (origin center, Y up)
-    let window_size = window.physical_size();
-    let ui_touch_pos = Vec2::new(
-        touch_pos.x - window_size.x as f32 / 2.0,
-        window_size.y as f32 / 2.0 - touch_pos.y,
-    );
-    
-    for (node, computed, transform) in ui_captures.iter() {
-        // Only check visible UI elements
-        if node.display == Display::None {
-            continue;
-        }
-        
+    for (computed, transform) in ui_nodes.iter() {
         // Use Bevy's built-in contains_point method
         if computed.contains_point(*transform, ui_touch_pos) {
             return true;
