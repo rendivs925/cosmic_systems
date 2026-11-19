@@ -1,0 +1,69 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.rendivs925.cosmicsystems'
+    compileSdk 34
+    // The Termux SDK repack only ships an aarch64 build-tools; 34.0.0 from
+    // Google's repository is x86_64 and cannot run here.
+    buildToolsVersion '37.0.0'
+
+    defaultConfig {
+        applicationId 'com.rendivs925.cosmicsystems'
+        minSdk 24
+        targetSdk 34
+        versionCode 305
+        versionName '0.3.5'
+
+        ndk {
+            // The simulator is built for 64-bit ARM only.
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs = ['src/main/java']
+            jniLibs.srcDirs = ['src/main/jniLibs']
+            // Mobile-sized copy of the shipped data (see
+            // scripts/prepare_android_assets.sh). Referenced in place so the
+            // 179 MB tree is not duplicated on disk.
+            assets.srcDirs = ['../../assets-android']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Keep the 150 MB cdylib mapped from the APK instead of copying it
+            // into the app's data directory on first launch.
+            useLegacyPackaging = false
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    // GameActivity extends AppCompatActivity, so an AppCompat theme/dependency
+    // is required in addition to the games-activity AAR.
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    // Must match android-activity 0.6.1 exactly; the native glue is compiled
+    // against this release's GameActivity ABI.
+    implementation 'androidx.games:games-activity:4.4.0'
+}

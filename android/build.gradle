@@ -1,0 +1,25 @@
+// Root build script for the Cosmic Systems Android package.
+//
+// The native simulator is built by Cargo (see scripts/build_android_apk.sh);
+// Gradle only assembles the Java/GameActivity shell and packages the prebuilt
+// cdylib plus the mobile asset tree.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.1.4'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.buildDir
+}

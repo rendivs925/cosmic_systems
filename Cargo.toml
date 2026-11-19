@@ -16,14 +16,13 @@ path = "src/main.rs"
 required-features = ["native"]
 
 [dependencies]
-# Bevy's defaults minus the GameActivity backend, plus NativeActivity: the
-# Terminal/Termux on-device APK pipeline (`cargo-apk2`) packages a NativeActivity
-# manifest, and Bevy's native-activity glue needs no Java or C++ shim.
+# Bevy configured with GameActivity backend for proper touch handling and lifecycle management.
+# GameActivity requires Gradle to build the APK with Google Games SDK integration.
 bevy = { version = "0.17.3", default-features = false, features = [
     "std",
     "async_executor",
     "android_shared_stdcxx",
-    "android-native-activity",
+    "android-game-activity",
     "animation",
     "bevy_asset",
     "bevy_audio",
@@ -35,9 +34,7 @@ bevy = { version = "0.17.3", default-features = false, features = [
     "bevy_gltf",
     "bevy_input_focus",
     "bevy_log",
-    "bevy_mesh_picking_backend",
     "bevy_pbr",
-    "bevy_picking",
     "bevy_render",
     "bevy_scene",
     "bevy_image",
@@ -46,16 +43,13 @@ bevy = { version = "0.17.3", default-features = false, features = [
     "bevy_light",
     "bevy_shader",
     "bevy_sprite",
-    "bevy_sprite_picking_backend",
     "bevy_sprite_render",
     "bevy_state",
     "bevy_text",
     "bevy_ui",
-    "bevy_ui_picking_backend",
     "bevy_ui_render",
     "bevy_window",
     "bevy_winit",
-    "custom_cursor",
     "default_font",
     "hdr",
     "multi_threaded",
@@ -125,47 +119,6 @@ debug = 0
 default = ["native"]
 native = ["dem"]
 dem = []
-
-# Android packaging metadata for `cargo-apk2` (Termux on-device builds).
-# See docs/android.md for the toolchain setup.
-[package.metadata.android]
-package = "com.rendivs925.cosmicsystems"
-apk_name = "cosmic_systems"
-assets = "assets-android"
-build_targets = ["aarch64-linux-android"]
-use_aapt2 = true
-# oboe/cpal link the C++ runtime on Android; cargo-apk2 copies the NDK's
-# libc++_shared.so into the APK when this is enabled.
-include_cplusplus_shared = true
-strip = "strip"
-
-[package.metadata.android.sdk]
-min_sdk_version = 24
-target_sdk_version = 35
-
-[package.metadata.android.application]
-label = "Cosmic Systems"
-# Fullscreen, no action bar: the UI draws its own safe-area padding.
-theme = "@android:style/Theme.Material.NoActionBar.Fullscreen"
-
-# NativeActivity needs no Java: the framework activity loads the cdylib named in
-# the meta-data and calls its `ANativeActivity_onCreate` (provided by
-# android-activity through `#[bevy_main]`).
-[[package.metadata.android.application.activity]]
-name = "android.app.NativeActivity"
-exported = true
-# The simulator is a landscape experience; keep the activity alive across
-# configuration changes so rotation does not restart the simulation.
-orientation = "sensorLandscape"
-config_changes = "orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection"
-
-[[package.metadata.android.application.activity.meta_data]]
-name = "android.app.lib_name"
-value = "cosmic_systems_wasm"
-
-[[package.metadata.android.application.activity.intent_filter]]
-actions = ["android.intent.action.MAIN"]
-categories = ["android.intent.category.LAUNCHER"]
 
 [[bin]]
 name = "etopo1_convert"
@@ -268,7 +221,8 @@ path = "src/bin/terrain_authority_transect.rs"
 required-features = ["dem"]
 
 # Android packaging profile: release-quality code with symbols stripped.
-# `cargo apk2 build --lib --profile android`
+# The Gradle build uses `--release` and strips the cdylib explicitly; this
+# profile remains for the legacy cargo-apk2 pipeline.
 [profile.android]
 inherits = "release"
 strip = "symbols"

@@ -1,5 +1,6 @@
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
+#[cfg(not(target_os = "android"))]
 use bevy::window::{CursorIcon, SystemCursorIcon};
 
 use crate::domain::value_objects::solar_system_params::SolarSystemParameters;
@@ -337,6 +338,7 @@ pub(crate) fn update_ui_hover_state(
         .any(|interaction| matches!(interaction, Interaction::Hovered | Interaction::Pressed));
 }
 
+#[cfg(not(target_os = "android"))]
 pub(crate) fn update_cursor_icon(
     mut commands: Commands,
     mut last_cursor: Local<Option<SystemCursorIcon>>,

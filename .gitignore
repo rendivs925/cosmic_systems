@@ -61,3 +61,10 @@ graphify-out/
 
 # Generated Android asset set (see scripts/prepare_android_assets.sh)
 assets-android/
+
+# Android Gradle build state and generated native/asset inputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/

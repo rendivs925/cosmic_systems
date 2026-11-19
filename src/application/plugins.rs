@@ -377,6 +377,7 @@ impl Plugin for SolarSystemModePlugin {
             Update,
             update_ui_hover_state.before(update_camera_controller),
         );
+        #[cfg(not(target_os = "android"))]
         app.add_systems(Update, update_cursor_icon);
 
         // Camera input and selected-body framing consume the rebased celestial

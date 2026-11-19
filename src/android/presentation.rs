@@ -4,10 +4,15 @@
 //! the solar view spawns in `FreeFlight` mode and touch supports that mode as
 //! well as the orbital mode used when a body is framed.
 //!
-//! UI interactions use Bevy's built-in touch system - no custom conversion needed.
+//! UI interaction is entirely Bevy's built-in `ui_focus_system`: this module
+//! only *reads* `Interaction` to decide whether a touch belongs to the camera
+//! or to a widget. It never writes `Interaction`, which would race the focus
+//! system.
 
-use bevy::math::{Dir3, Rect};
+use bevy::math::Dir3;
 use bevy::prelude::*;
+use bevy::ui::UiGlobalTransform;
+use bevy::window::PrimaryWindow;
 
 use crate::infrastructure::bevy_adapters::entity_components::{CameraController, CameraMode};
 
@@ -26,30 +31,31 @@ pub fn install(app: &mut App) {
 /// flight). Both write through the same `CameraController` / `Transform` state
 /// the desktop input path uses.
 ///
-/// Touches that are over UI elements are ignored to prevent buttons, menus,
-/// and cards from being unresponsive on mobile. Bevy's built-in touch system
-/// handles UI interactions automatically.
+/// A touch that Bevy's focus system reports as `Pressed` on a widget is left to
+/// that widget, so pressing a button never rotates the view.
 fn touch_camera_controls(
     touches: Res<Touches>,
-    ui_interactions: Query<(Entity, &Interaction, &GlobalTransform, &ComputedNode)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    ui_interactions: Query<(&Interaction, &UiGlobalTransform, &ComputedNode)>,
     mut state: Local<TouchState>,
     mut cameras: Query<(&mut CameraController, &mut Transform)>,
 ) {
-    // Collect touches that are NOT over UI elements
-    let mut camera_touches: Vec<Vec2> = Vec::new();
+    // `Touch::position()` is in logical pixels while UI layout (`ComputedNode`)
+    // is in physical pixels. Bevy's focus system applies the same conversion
+    // before hit-testing, so the camera must too.
+    let scale_factor = windows.single().map(|w| w.scale_factor()).unwrap_or(1.0);
 
+    // Collect touches that are not owned by a UI widget.
+    let mut camera_touches: Vec<Vec2> = Vec::new();
     for touch in touches.iter() {
-        let touch_pos = touch.position();
-        
-        // Check if this specific touch is over any UI element
-        let is_over_ui = is_touch_over_ui_element(touch_pos, &ui_interactions);
-        
-        if !is_over_ui {
-            camera_touches.push(touch_pos);
+        let position = touch.position();
+        let physical = position * scale_factor;
+        if !is_touch_over_ui_element(physical, &ui_interactions) {
+            camera_touches.push(position);
         }
     }
 
-    // Process camera controls with non-UI touches
+    // Process camera controls with non-UI touches.
     match camera_touches.len() {
         0 => {
             state.last_position = None;
@@ -92,11 +98,11 @@ fn touch_camera_controls(
             state.pinch_distance = None;
         }
         _ => {
-            // Two or more touches - handle pinch zoom
+            // Two or more touches - handle pinch zoom.
             let first = camera_touches[0];
             let second = camera_touches[1];
             let distance = first.distance(second);
-            
+
             if let Some(previous) = state.pinch_distance {
                 let ratio = (distance / previous.max(1.0) - 1.0).clamp(-0.25, 0.25);
                 for (mut controller, mut transform) in &mut cameras {
@@ -124,26 +130,15 @@ fn touch_camera_controls(
     }
 }
 
-/// Check if a touch position is over any UI element using Bevy's built-in Interaction system.
+/// Whether Bevy's focus system currently has a widget pressed at `physical`.
+///
+/// `ComputedNode::contains_point` is the same hit test `ui_focus_system` uses,
+/// so border radius, scale and transform are handled consistently.
 fn is_touch_over_ui_element(
-    touch_pos: Vec2,
-    ui_interactions: &Query<(Entity, &Interaction, &GlobalTransform, &ComputedNode)>,
+    physical: Vec2,
+    ui_interactions: &Query<(&Interaction, &UiGlobalTransform, &ComputedNode)>,
 ) -> bool {
-    for (_entity, interaction, transform, computed) in ui_interactions.iter() {
-        // Only block touches when UI element is actually Pressed, not Hovered
-        if *interaction == Interaction::Pressed {
-            // Get the UI element's bounds
-            let translation = transform.translation();
-            let ui_pos = Vec2::new(translation.x, translation.y);
-            let size = computed.size();
-            
-            // Check if touch is within this element's bounds
-            let bounds = Rect::from_center_size(ui_pos, size);
-            if bounds.contains(touch_pos) {
-                return true;
-            }
-        }
-    }
-    false
+    ui_interactions.iter().any(|(interaction, transform, node)| {
+        *interaction == Interaction::Pressed && node.contains_point(*transform, physical)
+    })
 }
-

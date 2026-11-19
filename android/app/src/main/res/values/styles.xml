@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      GameActivity extends AppCompatActivity, so the activity theme must
+      descend from Theme.AppCompat. Keep the fullscreen, black presentation
+      the NativeActivity build used.
+    -->
+    <style name="Theme.CosmicSystems" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

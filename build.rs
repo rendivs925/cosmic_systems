@@ -26,11 +26,15 @@ fn main() {
 
     println!("cargo:rustc-env=GIT_HASH={revision}");
 
-    // Package id for the Android media-directory log. `cargo-apk2` exports it;
-    // `rustc-env` keeps it part of the fingerprint, unlike `option_env!`.
+    // Package id for the Android media-directory log. The Gradle build exports
+    // `ANDROID_PACKAGE_NAME`; `cargo-apk2` (legacy) exports
+    // `CARGO_APK2_PACKAGE`. `rustc-env` keeps the value part of the
+    // fingerprint, unlike `option_env!`.
+    println!("cargo:rerun-if-env-changed=ANDROID_PACKAGE_NAME");
     println!("cargo:rerun-if-env-changed=CARGO_APK2_PACKAGE");
-    let package =
-        std::env::var("CARGO_APK2_PACKAGE").unwrap_or_else(|_| "cosmic_systems".to_string());
+    let package = std::env::var("ANDROID_PACKAGE_NAME")
+        .or_else(|_| std::env::var("CARGO_APK2_PACKAGE"))
+        .unwrap_or_else(|_| "cosmic_systems".to_string());
     println!("cargo:rustc-env=ANDROID_PACKAGE={package}");
     // Re-run when the checked-out revision changes.
     println!("cargo:rerun-if-changed=.git/HEAD");
